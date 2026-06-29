@@ -24,8 +24,8 @@ import ccxt
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-MD = Path('../ethereum-ai-trader/models')
-JOURNAL = Path('../ethereum-ai-trader/journal')
+MD = Path('./models')
+JOURNAL = Path('./journal')
 JOURNAL.mkdir(parents=True, exist_ok=True)
 
 # OKX credentials
@@ -38,12 +38,12 @@ OKX_CONFIG = {
     'options': {'defaultType': 'swap'},
 }
 
-PAIRS = ['ETH/USDT:USDT']
+PAIRS = ['ETH/USDT:USDT', 'BTC/USDT:USDT']
 TIMEFRAME = '4h'
 CHECK_INTERVAL_MINUTES = 3  # Check every 3 minutes
 
 # Risk params (from iteration tests)
-LEVERAGE = 10
+LEVERAGE = 50
 POSITION_PCT = 0.20
 STOP_LOSS_PCT = 0.08
 MIN_CONFIDENCE = 0.60
@@ -104,9 +104,28 @@ class LiveTrader:
         if not preds or not preds[-1]:
             return None
 
+        # RL dual-signal: load RL agent and get second opinion
+        rl_action = None
+        try:
+            from engine.rl_signal import RlSignalAgent
+            rl = RlSignalAgent(model_dir=str(MD))
+            if rl.load():
+                rl_action = rl.predict(features)
+                logger.info(f"[RL] Signal: {rl_action}")
+        except Exception as e:
+            logger.debug(f"[RL] Not available: {e}")
+
         p = preds[-1]
         er = p['expected_return']
         conf = p['confidence']
+
+        # RL-LightGBM fusion: if RL disagrees with high confidence, RL vetoes
+        if rl_action and rl_action in ('long', 'short'):
+            lgbm_action = 'long' if er > 0.001 else 'short' if er < -0.001 else 'hold'
+            if lgbm_action != rl_action and lgbm_action != 'hold':
+                logger.info(f"[DUAL] RL({rl_action}) vs LGBM({lgbm_action}) — RL overrides")
+                er = 0.003 if rl_action == 'long' else -0.003
+                conf = max(conf, 0.65)
 
         if conf < MIN_CONFIDENCE:
             return {'action': 'HOLD', 'reason': f'Confidence {conf:.2f} < {MIN_CONFIDENCE}',
@@ -166,9 +185,33 @@ class LiveTrader:
                 leverage=decision.get('leverage', LEVERAGE),
             )
 
-            # Execute
+            # Execute — check existing position first
             price = float(df['close'].iloc[-1])
             if action in ('long', 'short'):
+                # Check existing position
+                existing_side = None
+                try:
+                    pos = self.exchange.fetch_position(pair)
+                    contracts = float(pos.get('contracts', 0) or 0)
+                    if contracts > 0:
+                        existing_side = pos.get('side', '')
+                except Exception:
+                    pass
+
+                if existing_side:
+                    if existing_side == action:
+                        logger.info(f"[SKIP] {pair}: already {action}, holding")
+                        continue
+                    else:
+                        logger.info(f"[FLIP] {pair}: closing {existing_side} -> opening {action}")
+                        # Close existing first
+                        try:
+                            close_side = 'buy' if existing_side == 'short' else 'sell'
+                            self.exchange.create_order(pair, 'market', close_side, contracts, None,
+                                {'reduceOnly': True, 'posSide': existing_side})
+                            logger.info(f"  Closed existing {existing_side}")
+                        except Exception as e:
+                            logger.warning(f"  Close failed: {e}")
                 logger.info(f"[SIGNAL] {pair} {action.upper()} @ ${price:,.2f} | {decision['reason'][:80]}")
                 self._trade_count += 1
 
@@ -191,15 +234,33 @@ class LiveTrader:
                 logger.info(f"[{action.upper()}] {pair} @ ${price:,.2f} | {decision['reason'][:60]}")
 
     def _place_order(self, pair: str, side: str, decision: dict, price: float):
-        """Place a real order on OKX."""
+        """Place a real order on OKX with isolated margin + stop-loss."""
         try:
             okx_side = 'buy' if side == 'long' else 'sell'
+            sl_pct = decision.get('stop_loss_pct', STOP_LOSS_PCT)
+            lev = decision.get('leverage', LEVERAGE)
+
+            # Entry order (long_short_mode requires posSide)
+            pos_side = 'short' if side == 'short' else 'long'
             order = self.exchange.create_order(
                 symbol=pair, type='market', side=okx_side,
-                amount=0.01,  # Minimum ETH amount
-                params={'leverage': decision.get('leverage', LEVERAGE)}
+                amount=0.01, params={'leverage': lev, 'posSide': 'short' if side == 'short' else 'long', 'tdMode': 'isolated'}
             )
-            logger.info(f"  ORDER PLACED: {order['id']} {okx_side} @ ~${price:,.2f}")
+            logger.info(f"  ORDER: {order['id']} {okx_side} @ ~${price:,.2f} | SL={sl_pct*100:.0f}%")
+
+            # Stop-loss
+            sl_side = 'buy' if okx_side == 'sell' else 'sell'
+            sl_price = round(price * (1 + sl_pct / lev) if okx_side == 'sell' else price * (1 - sl_pct / lev), 2)
+            try:
+                self.exchange.create_order(
+                    symbol=pair, type='stop', side=sl_side,
+                    amount=0.01, price=sl_price,
+                    params={'stopLossPrice': sl_price, 'reduceOnly': True, 'posSide': 'short' if side == 'short' else 'long'}
+                )
+                logger.info(f"  SL: {sl_side} @ ${sl_price:,.2f}")
+            except Exception as sle:
+                logger.warning(f"  SL FAILED: {sle}")
+
         except Exception as e:
             logger.error(f"  ORDER FAILED: {e}")
 
