@@ -1,0 +1,49 @@
+# ===== SENSITIVE FILES =====
+api.txt
+config.json
+.env
+*.key
+*.pem
+*secret*
+*password*
+
+# ===== MODELS (large binary files) =====
+models/*.pkl
+models/*.joblib
+
+# ===== DATA (large) =====
+user_data/
+*.feather
+*.parquet
+
+# ===== JOURNAL (runtime data) =====
+journal/
+
+# ===== REPORTS (generated) =====
+reports/*.docx
+reports/*.json
+
+# ===== PYTHON =====
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+dist/
+build/
+
+# ===== DOCKER =====
+pgdata/
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ===== HOOK CACHE =====
+.claude/sdd-cache/
+.claude/.simplify-ignore-cache/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
