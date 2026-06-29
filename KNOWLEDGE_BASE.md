@@ -162,6 +162,51 @@ ethereum-ai-trader/
 | `/ship` | 发布前审查 |
 
 ## 代码审查发现 (2026-06-28)
+（内容保持不变）
+
+## Day 5-7 迭代结果 (2026-06-29)
+- Day 5: BTC EMA-Trend优化 (+53%, DD 0.7%)
+- Day 6: 集成测试 (6/6通过)
+- Day 7: Launch Check 20/24, 安全审计 3 Critical修复
+- 扩展 Day 8-14: XGBoost评估 (不如LightGBM), 动态仓位 (提升104-1155%)
+
+## 生产部署 (2026-06-29)
+
+### 代理配置
+- OKX API 通过 v2rayN SOCKS5 访问 (127.0.0.1:10808)
+- freqtrade async (aiohttp) 不兼容 SOCKS5
+- 解决方案: sitecustomize.py monkey-patch aiohttp + ProxyConnector
+- 最终方案: 独立 LiveTrader 使用同步 ccxt (完美兼容 SOCKS5)
+
+### Live Trader 系统
+- 独立交易引擎: `engine/live_trader.py` (不依赖 freqtrade)
+- 每3分钟检查市场，AI决策 LONG/SHORT/HOLD
+- 所有决策存档到 `journal/decisions_*.jsonl`
+- 运行模式: `python -m engine.live_trader` (dry-run) / `--live` (实盘)
+- 配置: ETH 10x, 20%仓位, 8%止损, MIN_SIGNAL=0.1%
+
+### MIN_SIGNAL 阈值测试
+- 测试了 0.1%, 0.2%, 0.3% 三个阈值在牛/熊/震荡市的表现
+- 0.2% 是最优阈值 (+278% 平均收益, 4.5% 回撤)
+- 0.1% 交易更多但收益下降 (+200%, 6.4% 回撤)
+- 当前使用 0.1% 用于实盘测试
+
+### AI Operator 系统
+- `/crypto-trader` 命令已注册 (user-level agent + slash command)
+- Crypto Trader Agent: `~/.claude/agents/crypto-trader.md`
+- AI Operator Loop: `engine/operator_loop.py` (异常检测+自动调整)
+- 监控 Loop: f67202fa (每5分钟检查)
+
+### GitHub 打包
+- 已合并为单一仓库: `ethereum-ai-trader/`
+- engine/ (21模块), web/ (19文件), tests/ (20+文件)
+- 敏感文件已排除: api.txt, config.json, models/, journal/
+- API密钥全部使用环境变量
+- 3 commits, 无敏感信息泄露
+
+### 当前状态
+- 交易员已关闭 (2026-06-29 13:40)
+- 运行 ~3.5小时, ~70次检查, 全部 HOLD (ETH 波动 < 0.1%)
 
 ### 已修复的 Critical 问题
 1. 日亏损上限 dead code -> 连接到 SelfOptimizer
