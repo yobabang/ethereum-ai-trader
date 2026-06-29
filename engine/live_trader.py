@@ -1,0 +1,248 @@
+"""Standalone Live Trader — sync ccxt + AI models, no freqtrade dependency.
+
+Runs a simple event loop:
+  1. Fetch latest OHLCV from OKX
+  2. Compute features
+  3. Run AI pipeline (regime -> direction -> risk -> decision)
+  4. Execute trade on OKX (or dry-run simulate)
+  5. Log to journal
+
+Usage:
+  python -m engine.live_trader          # dry-run
+  python -m engine.live_trader --live    # REAL trading
+"""
+
+import os, sys, json, time, logging
+sys.path.insert(0, '.')
+import numpy as np; import pandas as pd
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Optional
+
+import ccxt
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
+
+MD = Path('../ethereum-ai-trader/models')
+JOURNAL = Path('../ethereum-ai-trader/journal')
+JOURNAL.mkdir(parents=True, exist_ok=True)
+
+# OKX credentials
+OKX_CONFIG = {
+    'apiKey': os.environ.get('OKX_API_KEY', ''),
+    'secret': os.environ.get('OKX_API_SECRET', ''),
+    'password': os.environ.get('OKX_API_PASSPHRASE', ''),
+    'enableRateLimit': True,
+    'proxies': {'http': 'socks5h://127.0.0.1:10808', 'https': 'socks5h://127.0.0.1:10808'},
+    'options': {'defaultType': 'swap'},
+}
+
+PAIRS = ['ETH/USDT:USDT']
+TIMEFRAME = '4h'
+CHECK_INTERVAL_MINUTES = 3  # Check every 3 minutes
+
+# Risk params (from iteration tests)
+LEVERAGE = 10
+POSITION_PCT = 0.20
+STOP_LOSS_PCT = 0.08
+MIN_CONFIDENCE = 0.60
+MIN_SIGNAL = 0.001  # 0.1% threshold (testing lower sensitivity)
+
+
+class LiveTrader:
+    def __init__(self, live: bool = False):
+        self.live = live
+        self.exchange: Optional[ccxt.Exchange] = None
+        self._last_ohlcv: dict[str, pd.DataFrame] = {}
+        self._open_positions: dict = {}
+        self._trade_count = 0
+        self._journal = self._init_journal()
+
+    def _init_journal(self):
+        from engine.trade_journal import TradeJournal
+        return TradeJournal(str(JOURNAL))
+
+    def connect(self):
+        self.exchange = ccxt.okx(OKX_CONFIG)
+        self.exchange.load_markets()
+        logger.info(f"Connected to OKX. {len(self.exchange.markets)} markets loaded")
+        for pair in PAIRS:
+            if pair in self.exchange.markets:
+                logger.info(f"  {pair}: available")
+        # Check balance
+        if self.live:
+            b = self.exchange.fetch_balance()
+            usdt = b.get('USDT', {}).get('total', 0)
+            logger.info(f"  Balance: {usdt} USDT")
+            self.exchange.set_leverage(LEVERAGE, pair)
+
+    def _fetch_ohlcv(self, pair: str) -> pd.DataFrame:
+        ohlcv = self.exchange.fetch_ohlcv(pair, TIMEFRAME, limit=300)
+        df = pd.DataFrame(ohlcv, columns=['date', 'open', 'high', 'low', 'close', 'volume'])
+        df['date'] = pd.to_datetime(df['date'], unit='ms')
+        return df.sort_values('date')
+
+    def _run_ai_pipeline(self, df: pd.DataFrame) -> Optional[dict]:
+        """Run the full AI pipeline and return a decision."""
+        from engine.features import FeatureEngineer
+        from engine.direction_predictor import DirectionPredictor
+        from engine.decision_arbitrator import DecisionArbitrator, RiskCalculator
+
+        fe = FeatureEngineer()
+        dp = DirectionPredictor(model_dir=str(MD))
+        arb = DecisionArbitrator(RiskCalculator())
+
+        try:
+            features = fe.compute_price_features(df)
+            dp.load()
+            preds = dp.predict(features.iloc[-1:])
+        except Exception as e:
+            logger.error(f"AI pipeline failed: {e}")
+            return None
+
+        if not preds or not preds[-1]:
+            return None
+
+        p = preds[-1]
+        er = p['expected_return']
+        conf = p['confidence']
+
+        if conf < MIN_CONFIDENCE:
+            return {'action': 'HOLD', 'reason': f'Confidence {conf:.2f} < {MIN_CONFIDENCE}',
+                    'confidence': conf, 'expected_return': er, 'position_size_pct': 0}
+        if abs(er) < MIN_SIGNAL:
+            return {'action': 'HOLD', 'reason': f'Signal {er:.5f} below noise floor',
+                    'confidence': conf, 'expected_return': er, 'position_size_pct': 0}
+
+        # EMA-Trend filter
+        e50 = df['close'].ewm(span=50).mean().iloc[-1]
+        pr = float(df['close'].iloc[-1])
+        if (er > 0 and pr < e50) or (er < 0 and pr > e50):
+            return {'action': 'HOLD', 'reason': f'Counter-trend blocked (EMA50={e50:.0f})',
+                    'confidence': conf, 'expected_return': er, 'position_size_pct': 0}
+
+        atr_pct = float(features['atr_ratio'].iloc[-1]) if 'atr_ratio' in features.columns else 0.015
+
+        decision = arb.decide(
+            account_equity=1000.0, current_positions=[],
+            regime='TRENDING_WEAK', expected_return=er,
+            confidence=conf, max_drawdown=p['max_drawdown'],
+            atr_pct=atr_pct,
+            adaptive_confidence=MIN_CONFIDENCE, adaptive_position_scalar=1.0,
+        )
+
+        return {
+            'action': decision.action.value,
+            'reason': decision.reason,
+            'expected_return': er,
+            'confidence': conf,
+            'position_size_pct': decision.position_size_pct,
+            'stop_loss_pct': decision.stop_loss_pct,
+            'take_profit_pct': decision.take_profit_pct,
+            'leverage': decision.leverage,
+        }
+
+    def run_once(self):
+        """One iteration of the trading loop."""
+        for pair in PAIRS:
+            df = self._fetch_ohlcv(pair)
+            decision = self._run_ai_pipeline(df)
+
+            if decision is None:
+                logger.warning(f"{pair}: AI pipeline returned None")
+                continue
+
+            action = decision['action']
+
+            # Log decision
+            self._journal.record_decision(
+                action=action, reason=decision.get('reason', ''),
+                confidence=decision.get('confidence', 0),
+                expected_return=decision.get('expected_return', 0),
+                position_size_pct=decision.get('position_size_pct', 0),
+                stop_loss_pct=decision.get('stop_loss_pct', 0),
+                take_profit_pct=decision.get('take_profit_pct', 0),
+                leverage=decision.get('leverage', LEVERAGE),
+            )
+
+            # Execute
+            price = float(df['close'].iloc[-1])
+            if action in ('long', 'short'):
+                logger.info(f"[SIGNAL] {pair} {action.upper()} @ ${price:,.2f} | {decision['reason'][:80]}")
+                self._trade_count += 1
+
+                if self.live:
+                    self._place_order(pair, action, decision, price)
+                else:
+                    logger.info(f"  [DRY-RUN] Would place {action.upper()} order")
+
+                # Record entry to journal
+                self._journal.record_entry(
+                    pair=pair, side=action, entry_price=price, amount=0.01,
+                    leverage=decision.get('leverage', LEVERAGE),
+                    stop_loss=price * (1 - decision['stop_loss_pct']) if action == 'long' else price * (1 + decision['stop_loss_pct']),
+                    take_profit=price * (1 + decision['take_profit_pct']) if action == 'long' else price * (1 - decision['take_profit_pct']),
+                    confidence=decision['confidence'],
+                    expected_return=decision['expected_return'],
+                    regime='TRENDING_WEAK',
+                )
+            else:
+                logger.info(f"[{action.upper()}] {pair} @ ${price:,.2f} | {decision['reason'][:60]}")
+
+    def _place_order(self, pair: str, side: str, decision: dict, price: float):
+        """Place a real order on OKX."""
+        try:
+            okx_side = 'buy' if side == 'long' else 'sell'
+            order = self.exchange.create_order(
+                symbol=pair, type='market', side=okx_side,
+                amount=0.01,  # Minimum ETH amount
+                params={'leverage': decision.get('leverage', LEVERAGE)}
+            )
+            logger.info(f"  ORDER PLACED: {order['id']} {okx_side} @ ~${price:,.2f}")
+        except Exception as e:
+            logger.error(f"  ORDER FAILED: {e}")
+
+    def run_loop(self):
+        """Main trading loop."""
+        self.connect()
+        logger.info(f"Live Trader started. Mode: {'LIVE' if self.live else 'DRY-RUN'}")
+        logger.info(f"Pairs: {PAIRS} | Leverage: {LEVERAGE}x | Check: {CHECK_INTERVAL_MINUTES}min")
+        logger.info(f"Risk: {POSITION_PCT*100:.0f}% pos, {STOP_LOSS_PCT*100:.0f}% SL, {MIN_CONFIDENCE*100:.0f}% min conf")
+
+        while True:
+            try:
+                self.run_once()
+            except Exception as e:
+                logger.error(f"Loop error: {e}", exc_info=True)
+                self._journal.record_anomaly('loop_error', str(e)[:200], 'warning')
+
+            self._trade_count += 1
+            mins = CHECK_INTERVAL_MINUTES
+            logger.info(f"[HEARTBEAT] Cycle #{self._trade_count} done | Next in {mins}min | ETH 10x DRY-RUN")
+            time.sleep(mins * 60)
+
+
+def main():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument('--live', action='store_true', help='REAL trading (default: dry-run)')
+    args = p.parse_args()
+
+    if args.live:
+        print("=" * 55)
+        print("  WARNING: LIVE TRADING MODE")
+        print("  Real orders will be placed on OKX")
+        print("=" * 55)
+        print("Type 'YES' to confirm: ", end='')
+        confirm = input().strip()
+        if confirm != 'YES':
+            print("Aborted.")
+            sys.exit(0)
+
+    trader = LiveTrader(live=args.live)
+    trader.run_loop()
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,23 @@
+# Core ML
+lightgbm>=4.0
+xgboost>=3.0
+numpy>=1.26
+pandas>=2.2
+scikit-learn>=1.5
+scipy>=1.14
+joblib>=1.4
+
+# Exchange
+ccxt>=4.5
+
+# API & Web
+fastapi>=0.115
+uvicorn>=0.30
+python-docx>=1.1
+
+# Proxy support
+aiohttp-socks>=0.9
+PySocks>=1.7
+
+# Optional: Freqtrade integration (for ai_strategy.py bridge)
+# pip install freqtrade

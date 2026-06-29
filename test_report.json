@@ -1,0 +1,594 @@
+{
+  "timestamp": "2026-06-28T22:48:33.690872",
+  "total": 82,
+  "passed": 77,
+  "failed": 5,
+  "pass_rate": 93.9,
+  "total_time_s": 33.3,
+  "special_100x_test": {
+    "initial_equity": 1000.0,
+    "final_equity": 1012.07,
+    "return_pct": 1.2,
+    "liquidated": true,
+    "max_drawdown_pct": 0.2,
+    "total_trades": 11,
+    "winning": 8,
+    "losing": 3
+  },
+  "results": [
+    {
+      "category": "1.Data",
+      "name": "BTC_USDT_USDT: columns=6",
+      "status": true,
+      "detail": "got ['date', 'open', 'high', 'low', 'close', 'volume']",
+      "duration_ms": 10.688066482543945
+    },
+    {
+      "category": "1.Data",
+      "name": "BTC_USDT_USDT: ohlc logic",
+      "status": "True",
+      "detail": "rows=1074",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "BTC_USDT_USDT: prices > 0",
+      "status": true,
+      "detail": "close_range=59296-97213",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "BTC_USDT_USDT: volume >= 0",
+      "status": "True",
+      "detail": "min=1638 max=103656",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "BTC_USDT_USDT: 4h continuity",
+      "status": "True",
+      "detail": "gaps=0",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "BTC_USDT_USDT: no duplicates",
+      "status": true,
+      "detail": "unique=True",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "BTC_USDT_USDT: monotonic",
+      "status": true,
+      "detail": "",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "BTC_USDT_USDT: >= 200 candles",
+      "status": true,
+      "detail": "count=1074",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "ETH_USDT_USDT: columns=6",
+      "status": true,
+      "detail": "got ['date', 'open', 'high', 'low', 'close', 'volume']",
+      "duration_ms": 0.0
+    },
+    {
+      "category": "1.Data",
+      "name": "ETH_USDT_USDT: ohlc logic",
+      "status": "True",
+      "detail": "rows=1074",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "ETH_USDT_USDT: prices > 0",
+      "status": true,
+      "detail": "close_range=1544-3366",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "ETH_USDT_USDT: volume >= 0",
+      "status": "True",
+      "detail": "min=56653 max=3742022",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "ETH_USDT_USDT: 4h continuity",
+      "status": "True",
+      "detail": "gaps=0",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "ETH_USDT_USDT: no duplicates",
+      "status": true,
+      "detail": "unique=True",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "ETH_USDT_USDT: monotonic",
+      "status": true,
+      "detail": "",
+      "duration_ms": 0
+    },
+    {
+      "category": "1.Data",
+      "name": "ETH_USDT_USDT: >= 200 candles",
+      "status": true,
+      "detail": "count=1074",
+      "duration_ms": 0
+    },
+    {
+      "category": "2.Features",
+      "name": "BTC_USDT_USDT: columns >= 51",
+      "status": true,
+      "detail": "count=52",
+      "duration_ms": 22.67169952392578
+    },
+    {
+      "category": "2.Features",
+      "name": "BTC_USDT_USDT: no NaN after warmup",
+      "status": "True",
+      "detail": "NaN_count=0",
+      "duration_ms": 0
+    },
+    {
+      "category": "2.Features",
+      "name": "BTC_USDT_USDT: RSI in [0,100]",
+      "status": "True",
+      "detail": "range=[10.8, 100.0]",
+      "duration_ms": 0
+    },
+    {
+      "category": "2.Features",
+      "name": "BTC_USDT_USDT: ADX in [0,100]",
+      "status": "True",
+      "detail": "range=[0.0, 74.0]",
+      "duration_ms": 0
+    },
+    {
+      "category": "2.Features",
+      "name": "BTC_USDT_USDT: ATR > 0",
+      "status": "True",
+      "detail": "mean=1046.2",
+      "duration_ms": 0
+    },
+    {
+      "category": "2.Features",
+      "name": "BTC_USDT_USDT: OBV no NaN",
+      "status": "True",
+      "detail": "NaN=0",
+      "duration_ms": 0
+    },
+    {
+      "category": "2.Features",
+      "name": "ETH_USDT_USDT: columns >= 51",
+      "status": true,
+      "detail": "count=52",
+      "duration_ms": 19.860267639160156
+    },
+    {
+      "category": "2.Features",
+      "name": "ETH_USDT_USDT: no NaN after warmup",
+      "status": "True",
+      "detail": "NaN_count=0",
+      "duration_ms": 0
+    },
+    {
+      "category": "2.Features",
+      "name": "ETH_USDT_USDT: RSI in [0,100]",
+      "status": "True",
+      "detail": "range=[13.7, 100.0]",
+      "duration_ms": 0
+    },
+    {
+      "category": "2.Features",
+      "name": "ETH_USDT_USDT: ADX in [0,100]",
+      "status": "True",
+      "detail": "range=[0.0, 72.6]",
+      "duration_ms": 0
+    },
+    {
+      "category": "2.Features",
+      "name": "ETH_USDT_USDT: ATR > 0",
+      "status": "True",
+      "detail": "mean=43.0",
+      "duration_ms": 0
+    },
+    {
+      "category": "2.Features",
+      "name": "ETH_USDT_USDT: OBV no NaN",
+      "status": "True",
+      "detail": "NaN=0",
+      "duration_ms": 0
+    },
+    {
+      "category": "3.Model",
+      "name": "M1.1: time-series split 80/20",
+      "status": true,
+      "detail": "train=1718 val=430",
+      "duration_ms": 1949.1417407989502
+    },
+    {
+      "category": "3.Model",
+      "name": "M1.2: classifier acc > 0.35",
+      "status": true,
+      "detail": "acc=1.000",
+      "duration_ms": 0
+    },
+    {
+      "category": "3.Model",
+      "name": "M1.3: direction acc > 0.50",
+      "status": false,
+      "detail": "acc=0.497",
+      "duration_ms": 0
+    },
+    {
+      "category": "3.Model",
+      "name": "M1.4: Spearman r > 0",
+      "status": "False",
+      "detail": "r=-0.0180 p=0.7095",
+      "duration_ms": 0
+    },
+    {
+      "category": "3.Model",
+      "name": "M1.5: confidence calibration",
+      "status": false,
+      "detail": "high_conf=430 low_conf=0",
+      "duration_ms": 0
+    },
+    {
+      "category": "3.Model",
+      "name": "M1.8: stability std < 0.05",
+      "status": "True",
+      "detail": "std=0.0000 mean=0.497",
+      "duration_ms": 0
+    },
+    {
+      "category": "3.Model",
+      "name": "M1.9: val dir_acc > 0.48",
+      "status": true,
+      "detail": "acc=0.497",
+      "duration_ms": 0
+    },
+    {
+      "category": "4.Backtest",
+      "name": "B1.1/2: BTC/USDT:USDT trades",
+      "status": true,
+      "detail": "trades=99",
+      "duration_ms": 3776.2274742126465
+    },
+    {
+      "category": "4.Backtest",
+      "name": "BTC/USDT:USDT: Sharpe",
+      "status": true,
+      "detail": "Sharpe=5.40",
+      "duration_ms": 0
+    },
+    {
+      "category": "4.Backtest",
+      "name": "BTC/USDT:USDT: MaxDD",
+      "status": "True",
+      "detail": "MaxDD=12.4%",
+      "duration_ms": 0
+    },
+    {
+      "category": "4.Backtest",
+      "name": "BTC/USDT:USDT: WinRate",
+      "status": true,
+      "detail": "WR=60%",
+      "duration_ms": 0
+    },
+    {
+      "category": "4.Backtest",
+      "name": "BTC/USDT:USDT: ProfitFactor",
+      "status": "True",
+      "detail": "PF=2.56",
+      "duration_ms": 0
+    },
+    {
+      "category": "4.Backtest",
+      "name": "BTC/USDT:USDT: Total Return",
+      "status": true,
+      "detail": "return=178.6%",
+      "duration_ms": 0
+    },
+    {
+      "category": "4.Backtest",
+      "name": "B1.1/2: ETH/USDT:USDT trades",
+      "status": true,
+      "detail": "trades=129",
+      "duration_ms": 1959.651231765747
+    },
+    {
+      "category": "4.Backtest",
+      "name": "ETH/USDT:USDT: Sharpe",
+      "status": true,
+      "detail": "Sharpe=1.73",
+      "duration_ms": 0
+    },
+    {
+      "category": "4.Backtest",
+      "name": "ETH/USDT:USDT: MaxDD",
+      "status": "False",
+      "detail": "MaxDD=28.6%",
+      "duration_ms": 0
+    },
+    {
+      "category": "4.Backtest",
+      "name": "ETH/USDT:USDT: WinRate",
+      "status": true,
+      "detail": "WR=43%",
+      "duration_ms": 0
+    },
+    {
+      "category": "4.Backtest",
+      "name": "ETH/USDT:USDT: ProfitFactor",
+      "status": "False",
+      "detail": "PF=1.25",
+      "duration_ms": 0
+    },
+    {
+      "category": "4.Backtest",
+      "name": "ETH/USDT:USDT: Total Return",
+      "status": true,
+      "detail": "return=58.2%",
+      "duration_ms": 0
+    },
+    {
+      "category": "4.Backtest",
+      "name": "B1.5: deterministic results",
+      "status": "True",
+      "detail": "",
+      "duration_ms": 0
+    },
+    {
+      "category": "5.Safety",
+      "name": "S1.1: HIGH_VOL blocks",
+      "status": true,
+      "detail": "got=hold",
+      "duration_ms": 0
+    },
+    {
+      "category": "5.Safety",
+      "name": "S1.2: Low conf blocks",
+      "status": true,
+      "detail": "got=hold",
+      "duration_ms": 0
+    },
+    {
+      "category": "5.Safety",
+      "name": "S1.3: Drawdown blocks",
+      "status": true,
+      "detail": "got=hold",
+      "duration_ms": 0
+    },
+    {
+      "category": "5.Safety",
+      "name": "S1.4: No same-dir",
+      "status": true,
+      "detail": "got=hold",
+      "duration_ms": 0
+    },
+    {
+      "category": "5.Safety",
+      "name": "S1.5: Funding blocks",
+      "status": true,
+      "detail": "got=hold",
+      "duration_ms": 0
+    },
+    {
+      "category": "5.Safety",
+      "name": "S1.6: 3 losses STOP",
+      "status": true,
+      "detail": "got=stop",
+      "duration_ms": 0
+    },
+    {
+      "category": "5.Safety",
+      "name": "S1.7: Position cap",
+      "status": true,
+      "detail": "got=hold",
+      "duration_ms": 0
+    },
+    {
+      "category": "5.Safety",
+      "name": "S1.8: Leverage <= 5",
+      "status": true,
+      "detail": "",
+      "duration_ms": 0
+    },
+    {
+      "category": "6.Edge",
+      "name": "E1.1: <50 candles raises",
+      "status": true,
+      "detail": "Need at least 50 candles, got 30",
+      "duration_ms": 0
+    },
+    {
+      "category": "6.Edge",
+      "name": "E1.2: exactly 50 candles ok",
+      "status": true,
+      "detail": "rows=50",
+      "duration_ms": 0
+    },
+    {
+      "category": "6.Edge",
+      "name": "E1.3: missing column raises KeyError",
+      "status": true,
+      "detail": "",
+      "duration_ms": 0
+    },
+    {
+      "category": "6.Edge",
+      "name": "E1.7: extreme volatility ok",
+      "status": true,
+      "detail": "",
+      "duration_ms": 0
+    },
+    {
+      "category": "6.Edge",
+      "name": "E1.8: SL floor at 0.5%",
+      "status": true,
+      "detail": "SL=0.0050",
+      "duration_ms": 0
+    },
+    {
+      "category": "7.Regression",
+      "name": "R1.1: first model accepted",
+      "status": true,
+      "detail": "",
+      "duration_ms": 0
+    },
+    {
+      "category": "7.Regression",
+      "name": "R1.3: worse model rejected",
+      "status": true,
+      "detail": "",
+      "duration_ms": 0
+    },
+    {
+      "category": "7.Regression",
+      "name": "R1.5: backtest reproducible",
+      "status": "True",
+      "detail": "return=224.6%",
+      "duration_ms": 0
+    },
+    {
+      "category": "8.Integration",
+      "name": "I1.1: e2e training",
+      "status": true,
+      "detail": "dict_keys(['regime_classifier', 'direction_predictor'])",
+      "duration_ms": 0
+    },
+    {
+      "category": "8.Integration",
+      "name": "I1.2: e2e backtest",
+      "status": true,
+      "detail": "candles=1024 trades=100",
+      "duration_ms": 0
+    },
+    {
+      "category": "8.Integration",
+      "name": "I1.5: AIStrategy init",
+      "status": true,
+      "detail": "timeframe=4h",
+      "duration_ms": 0
+    },
+    {
+      "category": "9.Perf",
+      "name": "P1.1: feature compute (1074 candles)",
+      "status": true,
+      "detail": "34ms",
+      "duration_ms": 33.86998176574707
+    },
+    {
+      "category": "9.Perf",
+      "name": "P1.2: classifier inference",
+      "status": true,
+      "detail": "6.2ms",
+      "duration_ms": 6.211042404174805
+    },
+    {
+      "category": "9.Perf",
+      "name": "P1.3: regressor inference",
+      "status": true,
+      "detail": "4.0ms",
+      "duration_ms": 4.02522087097168
+    },
+    {
+      "category": "9.Perf",
+      "name": "P1.4: full pipeline",
+      "status": true,
+      "detail": "7.2ms",
+      "duration_ms": 7.248878479003906
+    },
+    {
+      "category": "9.Perf",
+      "name": "P1.5: backtest (1074 candles)",
+      "status": true,
+      "detail": "3.8s",
+      "duration_ms": 3841.158390045166
+    },
+    {
+      "category": "9.Perf",
+      "name": "P1.8: batch 100 predictions",
+      "status": true,
+      "detail": "185ms",
+      "duration_ms": 184.65828895568848
+    },
+    {
+      "category": "SPECIAL",
+      "name": "100x: initial $1000",
+      "status": true,
+      "detail": "leverage=100x",
+      "duration_ms": 0
+    },
+    {
+      "category": "SPECIAL",
+      "name": "100x: final equity",
+      "status": true,
+      "detail": "$1012.07 (+1.2%)",
+      "duration_ms": 0
+    },
+    {
+      "category": "SPECIAL",
+      "name": "100x: liquidated",
+      "status": true,
+      "detail": "at candle 11",
+      "duration_ms": 0
+    },
+    {
+      "category": "SPECIAL",
+      "name": "100x: total trades",
+      "status": true,
+      "detail": "11",
+      "duration_ms": 0
+    },
+    {
+      "category": "SPECIAL",
+      "name": "100x: winning trades",
+      "status": true,
+      "detail": "8",
+      "duration_ms": 0
+    },
+    {
+      "category": "SPECIAL",
+      "name": "100x: losing trades",
+      "status": true,
+      "detail": "3",
+      "duration_ms": 0
+    },
+    {
+      "category": "SPECIAL",
+      "name": "100x: max drawdown",
+      "status": true,
+      "detail": "0.2%",
+      "duration_ms": 0
+    },
+    {
+      "category": "SPECIAL",
+      "name": "100x: liquidation price",
+      "status": true,
+      "detail": "$88557.98",
+      "duration_ms": 0
+    },
+    {
+      "category": "SPECIAL",
+      "name": "100x: survival analysis",
+      "status": true,
+      "detail": "liquidated at candle 11",
+      "duration_ms": 0
+    }
+  ]
+}
