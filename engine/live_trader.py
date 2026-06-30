@@ -57,6 +57,7 @@ class LiveTrader:
         self._last_ohlcv: dict[str, pd.DataFrame] = {}
         self._open_positions: dict = {}
         self._trade_count = 0
+        self._rl_warned = False
         self._journal = self._init_journal()
 
     def _init_journal(self):
@@ -104,16 +105,20 @@ class LiveTrader:
         if not preds or not preds[-1]:
             return None
 
-        # RL dual-signal: load RL agent and get second opinion
+        # RL dual-signal (warn once if model missing)
         rl_action = None
         try:
             from engine.rl_signal import RlSignalAgent
             rl = RlSignalAgent(model_dir=str(MD))
             if rl.load():
                 rl_action = rl.predict(features)
-                logger.info(f"[RL] Signal: {rl_action}")
+            elif not self._rl_warned:
+                logger.info("RL model not trained — using LightGBM-only mode")
+                self._rl_warned = True
         except Exception as e:
-            logger.debug(f"[RL] Not available: {e}")
+            if not self._rl_warned:
+                logger.info(f"RL not available: {e}")
+                self._rl_warned = True
 
         p = preds[-1]
         er = p['expected_return']
@@ -201,15 +206,28 @@ class LiveTrader:
                 if existing_side:
                     if existing_side == action:
                         logger.info(f"[SKIP] {pair}: already {action}, holding")
+                        # Check if SL was hit (position disappeared since last check)
+                        if pair in self._open_positions and self._open_positions[pair] != existing_side:
+                            logger.info(f"[EXIT] {pair}: position closed (SL/flip)")
+                            self._journal.record_exit(
+                                trade_id=f"{pair}_{existing_side}",
+                                exit_price=price, pnl=0, pnl_pct=0,
+                                exit_reason='stop_loss_or_flip', duration_hours=0
+                            )
                         continue
                     else:
                         logger.info(f"[FLIP] {pair}: closing {existing_side} -> opening {action}")
-                        # Close existing first
                         try:
                             close_side = 'buy' if existing_side == 'short' else 'sell'
                             self.exchange.create_order(pair, 'market', close_side, contracts, None,
                                 {'reduceOnly': True, 'posSide': existing_side})
                             logger.info(f"  Closed existing {existing_side}")
+                            # Record exit
+                            self._journal.record_exit(
+                                trade_id=f"{pair}_{existing_side}",
+                                exit_price=price, pnl=0, pnl_pct=0,
+                                exit_reason='signal_flip', duration_hours=0
+                            )
                         except Exception as e:
                             logger.warning(f"  Close failed: {e}")
                 logger.info(f"[SIGNAL] {pair} {action.upper()} @ ${price:,.2f} | {decision['reason'][:80]}")
