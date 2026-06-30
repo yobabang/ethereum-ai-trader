@@ -46,8 +46,8 @@ CHECK_INTERVAL_MINUTES = 3  # Check every 3 minutes
 LEVERAGE = 50
 POSITION_PCT = 0.20
 STOP_LOSS_PCT = 0.08
-MIN_CONFIDENCE = 0.60
-MIN_SIGNAL = 0.001  # 0.1% threshold (testing lower sensitivity)
+MIN_CONFIDENCE = 0.50  # Lowered for low-vol BTC/ETH
+MIN_SIGNAL = 0.0005  # 0.05% threshold
 
 
 class LiveTrader:

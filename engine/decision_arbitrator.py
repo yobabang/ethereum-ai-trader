@@ -309,10 +309,11 @@ class DecisionArbitrator:
         # Override the risk calculator's internal confidence floor
         self.risk.MIN_CONFIDENCE = conf_threshold
 
-        # ---- Rule 3: Drawdown risk too high → hold ----
+        # ---- Rule 3: Drawdown risk too high → hold (relaxed for small accounts) ----
         max_loss = abs(max_drawdown) * account_equity
-        if max_loss > account_equity * 0.05:
-            return self._hold(f"Max drawdown risk ${max_loss:.0f} > 5% equity")
+        drawdown_pct_threshold = 0.15 if account_equity < 2000 else 0.05
+        if max_loss > account_equity * drawdown_pct_threshold:
+            return self._hold(f"Max drawdown risk ${max_loss:.0f} > {drawdown_pct_threshold*100:.0f}% equity")
 
         # ---- Rule 4: No same-direction entry if already losing ----
         for pos in current_positions:
@@ -325,7 +326,7 @@ class DecisionArbitrator:
                     )
 
         # ---- Rule 5: Extreme funding → directional bias ----
-        MIN_SIGNAL = 0.002
+        MIN_SIGNAL = 0.0005  # 0.05% for BTC/ETH (low vol pairs)
         if abs(expected_return) < MIN_SIGNAL:
             return self._hold(f"Signal {expected_return:.5f} below noise floor {MIN_SIGNAL}")
 
@@ -369,6 +370,8 @@ class DecisionArbitrator:
         # Scale position by expected return magnitude AND adaptive scalar
         return_magnitude = min(abs(expected_return) / 0.02, 1.0)
         position_size = round(risk_params.max_position_pct * return_magnitude * pos_scalar, 4)
+        # Floor: minimum 5% position for meaningful trades
+        position_size = max(position_size, 0.05) if position_size > 0 else 0
 
         return Decision(
             action=action,
