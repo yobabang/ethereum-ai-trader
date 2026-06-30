@@ -109,21 +109,28 @@ class RegimeClassifier:
     # Training
     # ------------------------------------------------------------------
 
-    def train(self, df: pd.DataFrame) -> dict:
+    def train(self, df: pd.DataFrame, label_horizon: int = 6) -> dict:
         """Train the classifier on labeled feature data.
 
         Args:
             df: Feature DataFrame (from FeatureEngineer). Labels are
                 generated internally via RegimeLabeler.
+            label_horizon: Number of candles ahead to predict the regime.
+                Labels are shifted forward by this amount so that features at
+                time t predict the regime at t+horizon. This removes the
+                same-instant label leakage that previously inflated accuracy
+                to ~0.995 (the classifier was just re-learning the labeler's
+                threshold rules, which are knowable at time t).
 
         Returns:
             dict with training metrics.
         """
         import lightgbm as lgb
 
-        # Generate labels
+        # Generate labels, then shift FORWARD so t-features predict (t+horizon) regime.
+        # Without this shift, labels are a deterministic function of t-features -> leakage.
         labeler = RegimeLabeler()
-        y = labeler.label(df)
+        y = labeler.label(df).shift(-label_horizon)
 
         # Select feature columns (numeric only — exclude date/index columns)
         self._feature_cols = [
@@ -179,11 +186,14 @@ class RegimeClassifier:
         if self._model is None:
             raise RuntimeError("Model not trained. Call train() or load() first.")
 
-        cols = [c for c in self._feature_cols if c in df.columns]
-        if not cols:
-            raise ValueError("No matching feature columns found in input DataFrame")
-
-        X = df[cols]
+        # Rebuild X strictly in training column order (see DirectionPredictor.predict
+        # for rationale). Missing columns → NaN, which LightGBM handles natively.
+        missing = [c for c in self._feature_cols if c not in df.columns]
+        if missing:
+            df = df.copy()
+            for c in missing:
+                df[c] = np.nan
+        X = df[list(self._feature_cols)]
         results: list[Optional[str]] = []
 
         for i in range(len(X)):

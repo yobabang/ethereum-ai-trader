@@ -1,6 +1,6 @@
 """Tests for Risk Calculator (Layer 3) & Decision Arbitrator (Layer 4)."""
 
-from freqtrade.ai.decision_arbitrator import (
+from engine.decision_arbitrator import (
     Action,
     Decision,
     DecisionArbitrator,

@@ -39,12 +39,16 @@ class DirectionPredictor:
     # Training
     # ------------------------------------------------------------------
 
-    def train(self, df: pd.DataFrame, horizon: int = 1) -> dict:
+    def train(self, df: pd.DataFrame, horizon: int = 4) -> dict:
         """Train the regressor on labeled data.
 
         Args:
             df: Feature DataFrame from FeatureEngineer.
-            horizon: Number of candles ahead (default 1 = 4h).
+            horizon: Number of candles ahead to predict. Default 4 — a
+                multi-candle horizon aggregates out high-frequency noise and
+                gives the model a more learnable signal than the previous
+                default of 1 (which yielded ~0.50 direction accuracy, i.e.
+                coin-flip, on 1h data).
 
         Returns:
             dict with metrics: rmse, direction_accuracy, samples.
@@ -131,11 +135,16 @@ class DirectionPredictor:
         if self._model is None:
             raise RuntimeError("Model not trained. Call train() or load() first.")
 
-        cols = [c for c in self._feature_cols if c in df.columns]
-        if not cols:
-            raise ValueError("No matching feature columns")
-
-        X = df[cols]
+        # Rebuild X strictly in training column order. Missing columns
+        # (e.g. derivatives absent at inference) are filled with NaN, which
+        # LightGBM handles natively — this keeps feature count/order identical
+        # to training instead of crashing on a shape mismatch.
+        missing = [c for c in self._feature_cols if c not in df.columns]
+        if missing:
+            df = df.copy()
+            for c in missing:
+                df[c] = np.nan
+        X = df[list(self._feature_cols)]
         results: list[Optional[dict]] = []
 
         for i in range(len(X)):

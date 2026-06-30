@@ -8,8 +8,8 @@ MD = '../ethereum-ai-trader/models'
 RP = '../ethereum-ai-trader/reports'
 Path(RP).mkdir(parents=True, exist_ok=True)
 
-from freqtrade.ai.features import FeatureEngineer
-from freqtrade.ai.direction_predictor import DirectionPredictor
+from engine.features import FeatureEngineer
+from engine.direction_predictor import DirectionPredictor
 fe = FeatureEngineer()
 dp = DirectionPredictor(model_dir=MD)
 

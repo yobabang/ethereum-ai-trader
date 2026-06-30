@@ -137,6 +137,7 @@ class AIBacktestAdapter:
         ohlcv: pd.DataFrame,
         pair: str = "BTC/USDT:USDT",
         warmup: int = 50,
+        derivatives: pd.DataFrame | None = None,
     ) -> BacktestResult:
         """Run backtest on historical OHLCV data.
 
@@ -144,16 +145,27 @@ class AIBacktestAdapter:
             ohlcv: DataFrame with [open, high, low, close, volume].
             pair: Trading pair name.
             warmup: Candles to skip for indicator warmup.
+            derivatives: Optional per-candle derivatives DataFrame. When given,
+                funding/OI/long-short features are merged in, and the real
+                funding_rate (if present) drives both funding-fee cost and the
+                safety rule 5 (extreme funding → reject counter-crowd direction).
 
         Returns:
             BacktestResult with full metrics.
         """
-        # ---- Compute features ----
+        # ---- Compute features (merge derivatives if provided) ----
         from engine.features import FeatureEngineer
 
         fe = FeatureEngineer()
-        features = fe.compute_price_features(ohlcv)
+        features = fe.compute_all_features(ohlcv, derivatives)
         logger.info(f"Features computed: {len(features)} rows, {len(features.columns)} cols")
+
+        # Pre-extract funding signal series for the safety rule (None if no derivatives)
+        has_funding = "funding_signal" in features.columns
+        funding_signal_series = features["funding_signal"] if has_funding else None
+        funding_rate_series = features["funding_rate"] if "funding_rate" in features.columns else None
+        if has_funding:
+            logger.info("Derivatives merged — funding_signal safety rule ACTIVE")
 
         # ---- Load models ----
         from engine.direction_predictor import DirectionPredictor
@@ -252,10 +264,16 @@ class AIBacktestAdapter:
                 open_positions.remove(pos)
                 closed_trades.append(pos)
 
-            # ---- Funding fee (simplified: every 8h = every 2 candles at 4h) ----
-            if i % 2 == 0:
+            # ---- Funding fee (every 8h on 1h data = every 8 candles; use real rate if available) ----
+            if i % 8 == 0:
+                # Real funding rate from derivatives if present, else fallback to constant
+                fr = (funding_rate_series.iloc[i]
+                      if funding_rate_series is not None and pd.notna(funding_rate_series.iloc[i])
+                      else self.funding_rate)
                 for pos in open_positions:
-                    funding_cost = pos.amount * price * self.funding_rate * pos.leverage
+                    # Long pays funding when rate>0, short pays when rate<0
+                    sign = 1.0 if pos.side == "long" else -1.0
+                    funding_cost = pos.amount * price * fr * pos.leverage * sign
                     equity -= funding_cost
 
             # ---- AI Decision for new entry ----
@@ -273,6 +291,18 @@ class AIBacktestAdapter:
 
                 # Simplified arbitrator check
                 direction = "long" if er > 0.002 else "short" if er < -0.002 else None
+
+                # Safety rule 5: extreme funding rejects the crowded direction.
+                # funding_signal > 2 → longs crowded → reject long
+                # funding_signal < -2 → shorts crowded → reject short
+                if direction and funding_signal_series is not None:
+                    fsig = funding_signal_series.iloc[i]
+                    if pd.notna(fsig):
+                        if fsig > 2.0 and direction == "long":
+                            direction = None  # extreme positive funding, reject long
+                        elif fsig < -2.0 and direction == "short":
+                            direction = None  # extreme negative funding, reject short
+
                 if direction and conf >= 0.55 and regime != "HIGH_VOLATILITY":
                     # Check no same-direction losing position
                     has_losing_same = any(

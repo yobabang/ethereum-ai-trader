@@ -47,9 +47,9 @@ LIQUIDATION_THRESHOLD = 1.0 / LEVERAGE  # 0.20 = 20%
 # =====================================================================
 # Load modules
 # =====================================================================
-from freqtrade.ai.features import FeatureEngineer
-from freqtrade.ai.direction_predictor import DirectionPredictor
-from freqtrade.ai.regime_classifier import RegimeClassifier
+from engine.features import FeatureEngineer
+from engine.direction_predictor import DirectionPredictor
+from engine.regime_classifier import RegimeClassifier
 
 
 def load_data(pair_safe: str) -> pd.DataFrame:

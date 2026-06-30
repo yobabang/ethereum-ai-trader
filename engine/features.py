@@ -13,6 +13,21 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+
+def _to_datetime(s: pd.Series) -> pd.Series:
+    """Robustly convert a date column to datetime.
+
+    Handles three input forms so OHLCV and derivatives always align:
+      - integer (ms epoch, as written by pull_derivatives_data.py) → unit='ms'
+      - datetime-like → passthrough via pd.to_datetime
+      - ISO string → pd.to_datetime
+    pd.to_datetime defaults to NANOseconds for ints, which silently misparses
+    ms-epoch values; this avoids that trap.
+    """
+    if pd.api.types.is_integer_dtype(s):
+        return pd.to_datetime(s, unit="ms")
+    return pd.to_datetime(s)
+
 # Minimum candles required for stable indicator calculation
 MIN_CANDLES = 50
 
@@ -221,6 +236,142 @@ class FeatureEngineer:
             "funding_signal": round(funding_signal, 4),
             "oi_intensity": round(np.log1p(abs(funding_rate)) * np.log1p(open_interest), 4),
         }
+
+    # ------------------------------------------------------------------
+    # Derivatives time-series features (for training / backtest)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _funding_signal_scalar(funding_rate: float) -> float:
+        """Map a single funding rate to a directional signal.
+
+        Mirrors the logic in compute_derivatives_features so the series
+        version and the snapshot version agree.
+        > 0.001 (0.1%) → bearish (negative), capped at -3
+        < -0.001       → bullish (positive), capped at +3
+        """
+        if funding_rate > 0.001:
+            return -min(funding_rate / 0.001, 3.0)
+        if funding_rate < -0.001:
+            return min(abs(funding_rate) / 0.001, 3.0)
+        return 0.0
+
+    def compute_derivatives_series(self, df_deriv: pd.DataFrame) -> pd.DataFrame:
+        """Build time-series derivatives features for training/backtest.
+
+        Unlike compute_derivatives_features (single snapshot → scalars), this
+        takes a per-candle derivatives DataFrame and produces rolling z-scores,
+        change rates, and extreme flags — the features with actual predictive
+        lead on short-horizon returns.
+
+        Args:
+            df_deriv: DataFrame with a 'date' column plus any of:
+                funding_rate, open_interest, long_short_ratio,
+                taker_buy_sell_ratio. Must be sorted by date, aligned to the
+                same timeframe/grid as the OHLCV it will be merged with.
+
+        Returns:
+            DataFrame with 'date' + derivatives feature columns. Rows where
+            the source data is NaN stay NaN (downstream training drops them).
+        """
+        out = pd.DataFrame({"date": _to_datetime(df_deriv["date"])})
+        d = df_deriv.copy()
+        d["date"] = _to_datetime(d["date"])
+
+        # ---- Funding rate features ----
+        if "funding_rate" in d.columns:
+            fr = pd.to_numeric(d["funding_rate"], errors="coerce").ffill()
+            out["funding_rate"] = fr.values
+            # Snapshot funding_signal (same logic as compute_derivatives_features)
+            out["funding_signal"] = fr.apply(self._funding_signal_scalar).values
+            # Rolling z-scores (24h and 7d for 1h data)
+            for win, suffix in ((24, "24"), (168, "168")):
+                roll = fr.rolling(win, min_periods=max(win // 4, 5))
+                mean = roll.mean()
+                std = roll.std()
+                out[f"funding_rate_zscore_{suffix}"] = ((fr - mean) / (std + 1e-10)).values
+            out["funding_rate_max_abs_24"] = fr.abs().rolling(24, min_periods=6).max().values
+            out["funding_signal_mean_24"] = out["funding_signal"].rolling(24, min_periods=6).mean().values
+            out["funding_signal_extreme"] = (out["funding_signal"].abs() >= 2.0).astype(float).values
+            # Was the past 24h ever at an extreme? (rolling any)
+            out["funding_signal_extreme_24"] = (
+                out["funding_signal"].abs().rolling(24, min_periods=6).max() >= 2.0
+            ).astype(float).values
+
+        # ---- Open interest features ----
+        if "open_interest" in d.columns:
+            oi = pd.to_numeric(d["open_interest"], errors="coerce").ffill()
+            out["open_interest"] = oi.values
+            out["open_interest_change_1h"] = oi.pct_change().values
+            out["open_interest_change_24h"] = oi.pct_change(24).values
+            roll_oi = oi.rolling(24, min_periods=6)
+            out["open_interest_zscore_24"] = (
+                (oi - roll_oi.mean()) / (roll_oi.std() + 1e-10)
+            ).values
+
+        # ---- Long/short ratio features ----
+        if "long_short_ratio" in d.columns:
+            ls = pd.to_numeric(d["long_short_ratio"], errors="coerce").ffill()
+            out["long_short_ratio"] = ls.values
+            roll_ls = ls.rolling(24, min_periods=6)
+            out["long_short_ratio_zscore_24"] = (
+                (ls - roll_ls.mean()) / (roll_ls.std() + 1e-10)
+            ).values
+            # Extreme crowding: ratio > 1.5 (longs crowded) or < 0.67 (shorts crowded)
+            out["long_short_ratio_extreme"] = (
+                ((ls > 1.5) | (ls < 0.67)).astype(float)
+            ).values
+
+        # ---- Taker buy/sell ratio features ----
+        if "taker_buy_sell_ratio" in d.columns:
+            tbs = pd.to_numeric(d["taker_buy_sell_ratio"], errors="coerce").ffill()
+            out["taker_buy_sell_ratio"] = tbs.values
+            # Deviation from 1.0 (balanced) — positive = buy pressure
+            out["taker_pressure"] = (tbs - 1.0).values
+            roll_tbs = tbs.rolling(24, min_periods=6)
+            out["taker_buy_sell_zscore_24"] = (
+                (tbs - roll_tbs.mean()) / (roll_tbs.std() + 1e-10)
+            ).values
+
+        return out
+
+    def compute_all_features(
+        self,
+        ohlcv: pd.DataFrame,
+        derivatives: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
+        """Compute price features and optionally merge derivatives series.
+
+        Args:
+            ohlcv: OHLCV DataFrame with a 'date' column (or datetime index).
+            derivatives: Optional per-candle derivatives DataFrame (output of
+                pull_derivatives_data.py). If provided, its time-series features
+                are merged onto the price features by date (left join), so
+                every downstream model gets the derivatives columns for free.
+
+        Returns:
+            Feature DataFrame. If derivatives given, contains 40+ price
+            indicators plus ~18 derivatives features.
+        """
+        feats = self.compute_price_features(ohlcv)
+
+        if derivatives is None or derivatives.empty:
+            return feats
+
+        # Ensure both sides have a datetime 'date' column for alignment
+        if "date" not in feats.columns:
+            feats = feats.copy()
+            feats["date"] = _to_datetime(ohlcv["date"]) if "date" in ohlcv.columns else feats.index
+        else:
+            feats["date"] = _to_datetime(feats["date"])
+
+        deriv_feats = self.compute_derivatives_series(derivatives)
+        # Merge on date (left join — keep all OHLCV rows; missing deriv → NaN)
+        merged = feats.merge(deriv_feats, on="date", how="left")
+        # Forward-fill derivatives features within gaps (they update slower than 1h)
+        deriv_cols = deriv_feats.columns.drop("date")
+        merged[deriv_cols] = merged[deriv_cols].ffill()
+        return merged
 
     # ==================================================================
     # Indicator primitives (no external dependency on TA-Lib)

@@ -61,7 +61,7 @@ def generate_report():
     # CATEGORY 2: FEATURE QUALITY (P0)
     # =================================================================
     print("\n--- 2. FEATURE QUALITY (P0) ---")
-    from freqtrade.ai.features import FeatureEngineer
+    from engine.features import FeatureEngineer
     fe = FeatureEngineer()
 
     for pair_safe in ["BTC_USDT_USDT", "ETH_USDT_USDT"]:
@@ -86,8 +86,8 @@ def generate_report():
     # CATEGORY 3: MODEL PERFORMANCE (P0 + P1)
     # =================================================================
     print("\n--- 3. MODEL PERFORMANCE ---")
-    from freqtrade.ai.regime_classifier import RegimeClassifier, RegimeLabeler
-    from freqtrade.ai.direction_predictor import DirectionPredictor
+    from engine.regime_classifier import RegimeClassifier, RegimeLabeler
+    from engine.direction_predictor import DirectionPredictor
 
     # Load combined features for training
     all_feats = []
@@ -145,7 +145,7 @@ def generate_report():
     # CATEGORY 4: BACKTEST (P0)
     # =================================================================
     print("\n--- 4. BACKTEST ROBUSTNESS ---")
-    from freqtrade.ai.backtest_adapter import AIBacktestAdapter
+    from engine.backtest_adapter import AIBacktestAdapter
 
     for pair_safe, pair_name in [("BTC_USDT_USDT", "BTC/USDT:USDT"), ("ETH_USDT_USDT", "ETH/USDT:USDT")]:
         df = load_data(pair_safe)
@@ -171,7 +171,7 @@ def generate_report():
     # CATEGORY 5: SAFETY RULES (P0, 8 rules)
     # =================================================================
     print("\n--- 5. SAFETY RULES (P0) ---")
-    from freqtrade.ai.decision_arbitrator import Action, DecisionArbitrator, RiskCalculator
+    from engine.decision_arbitrator import Action, DecisionArbitrator, RiskCalculator
 
     arb = DecisionArbitrator(RiskCalculator())
 
@@ -246,7 +246,7 @@ def generate_report():
     # CATEGORY 7: REGRESSION (P0)
     # =================================================================
     print("\n--- 7. REGRESSION ---")
-    from freqtrade.ai.self_optimizer import SelfOptimizer
+    from engine.self_optimizer import SelfOptimizer
     import shutil, os
 
     opt_dir = str(MODEL_DIR)
@@ -273,7 +273,7 @@ def generate_report():
     print("\n--- 8. INTEGRATION ---")
 
     # I1.1: End-to-end training
-    from freqtrade.ai.trainer import train_models
+    from engine.trainer import train_models
     try:
         results = train_models(datadir=str(DATA_DIR), model_dir=str(MODEL_DIR))
         log("8.Integration", "I1.1: e2e training", "regime_classifier" in results, str(results.keys()), 0)
@@ -286,7 +286,7 @@ def generate_report():
     log("8.Integration", "I1.2: e2e backtest", result_e2e.candles_processed > 0, f"candles={result_e2e.candles_processed} trades={result_e2e.total_trades}", 0)
 
     # I1.5: AIStrategy integration
-    from freqtrade.ai.ai_strategy import AIStrategy
+    from engine.ai_strategy import AIStrategy
     config = {
         "trading_mode": "futures", "margin_mode": "isolated", "stake_currency": "USDT",
         "stake_amount": "unlimited", "max_open_trades": 3, "dry_run": True,

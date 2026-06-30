@@ -10,8 +10,8 @@ def run_config(name, pair_safe, leverage, position_pct, stop_loss_pct, min_confi
     df = pd.read_feather(f'user_data/data/okx/{pair_safe}-4h-futures.feather')
     df['date'] = pd.to_datetime(df['date']); df = df.sort_values('date')
 
-    from freqtrade.ai.features import FeatureEngineer
-    from freqtrade.ai.direction_predictor import DirectionPredictor
+    from engine.features import FeatureEngineer
+    from engine.direction_predictor import DirectionPredictor
 
     fe = FeatureEngineer(); features = fe.compute_price_features(df)
     dp = DirectionPredictor(model_dir=MD)

@@ -4,7 +4,7 @@ import shutil
 import time
 from pathlib import Path
 
-from freqtrade.ai.self_optimizer import SelfOptimizer
+from engine.self_optimizer import SelfOptimizer
 
 
 class TestSelfOptimizer:

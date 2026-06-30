@@ -10,9 +10,9 @@ def run_comparison(pair_safe, pair_name, initial=1000, leverage=5):
     df['date'] = pd.to_datetime(df['date']); df = df.sort_values('date')
 
     # ---- Load AI models ----
-    from freqtrade.ai.features import FeatureEngineer
-    from freqtrade.ai.direction_predictor import DirectionPredictor
-    from freqtrade.ai.regime_classifier import RegimeClassifier
+    from engine.features import FeatureEngineer
+    from engine.direction_predictor import DirectionPredictor
+    from engine.regime_classifier import RegimeClassifier
 
     fe = FeatureEngineer()
     features = fe.compute_price_features(df)

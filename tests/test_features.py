@@ -25,19 +25,29 @@ class TestPriceFeatures:
     """RED: Tests for price-based technical indicators."""
 
     def test_compute_all_returns_dataframe_with_no_nan(self):
-        """After computing all features, the result must have zero NaN values."""
-        from freqtrade.ai.features import FeatureEngineer
+        """After warmup, every row must have zero NaN values.
+
+        Technical indicators need a lookback window (e.g. SMA50 needs 50
+        candles), so the first ~50 rows legitimately contain NaN. Downstream
+        code (direction_predictor, regime_classifier) drops these. The contract
+        is: no NaN AFTER the warmup period.
+        """
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()
         result = fe.compute_price_features(ohlcv)
 
         assert isinstance(result, pd.DataFrame)
-        assert not result.isna().any().any(), f"NaN found in columns: {result.columns[result.isna().any()].tolist()}"
+        warmup = 50
+        after_warmup = result.iloc[warmup:]
+        assert not after_warmup.isna().any().any(), (
+            f"NaN in columns after warmup: {after_warmup.columns[after_warmup.isna().any()].tolist()}"
+        )
 
     def test_rsi_column_present_and_in_range(self):
         """RSI must be between 0 and 100."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()
@@ -50,7 +60,7 @@ class TestPriceFeatures:
 
     def test_macd_columns_present(self):
         """MACD, MACD signal, and MACD histogram must be present."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()
@@ -61,7 +71,7 @@ class TestPriceFeatures:
 
     def test_bb_columns_present(self):
         """Bollinger Bands must include upper, middle, lower, and width."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()
@@ -72,7 +82,7 @@ class TestPriceFeatures:
 
     def test_atr_column_present(self):
         """ATR must be present and positive."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()
@@ -84,7 +94,7 @@ class TestPriceFeatures:
 
     def test_adx_column_present(self):
         """ADX must be present."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()
@@ -94,7 +104,7 @@ class TestPriceFeatures:
 
     def test_ema_columns_present(self):
         """Key EMAs must be present."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()
@@ -105,7 +115,7 @@ class TestPriceFeatures:
 
     def test_volume_features_present(self):
         """Volume indicators must be present."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()
@@ -116,7 +126,7 @@ class TestPriceFeatures:
 
     def test_minimum_candles_required(self):
         """Require at least 50 candles for stable indicator calculation."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(30)
         fe = FeatureEngineer()
@@ -126,7 +136,7 @@ class TestPriceFeatures:
 
     def test_return_series_features(self):
         """Return-based features must be present."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()
@@ -137,7 +147,7 @@ class TestPriceFeatures:
 
     def test_momentum_features_present(self):
         """Momentum/ROC features must be present."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()
@@ -159,7 +169,7 @@ class TestOrderbookFeatures:
 
     def test_spread_feature(self):
         """Spread percentage must be computed."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         fe = FeatureEngineer()
         ob = self.make_orderbook()
@@ -170,7 +180,7 @@ class TestOrderbookFeatures:
 
     def test_imbalance_feature(self):
         """Bid/ask volume imbalance must be between -1 and 1."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         fe = FeatureEngineer()
         ob = self.make_orderbook()
@@ -181,7 +191,7 @@ class TestOrderbookFeatures:
 
     def test_depth_features(self):
         """Depth features must include multiple levels."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         fe = FeatureEngineer()
         ob = self.make_orderbook()
@@ -197,7 +207,7 @@ class TestDerivativesFeatures:
 
     def test_funding_rate_columns(self):
         """Funding rate features from derivatives data."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         fe = FeatureEngineer()
         deriv = {
@@ -213,7 +223,7 @@ class TestDerivativesFeatures:
 
     def test_funding_rate_signal(self):
         """Extreme funding rates should produce a directional signal."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         fe = FeatureEngineer()
         # Very positive funding = shorts get paid = bearish signal
@@ -237,7 +247,7 @@ class TestFeaturePipeline:
 
     def test_full_pipeline_returns_no_nan(self):
         """After full pipeline, every row after warmup must have no NaN."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()
@@ -253,7 +263,7 @@ class TestFeaturePipeline:
 
     def test_output_row_count_matches_input(self):
         """Feature output must have same number of rows as input."""
-        from freqtrade.ai.features import FeatureEngineer
+        from engine.features import FeatureEngineer
 
         ohlcv = make_ohlcv(200)
         fe = FeatureEngineer()

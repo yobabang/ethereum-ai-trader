@@ -2,7 +2,16 @@
 
 Generates a Word (.docx) report at the end.
 Run: PYTHONPATH=.;$PYTHONPATH <venv>/python -m tests.system_integration_test
+
+NOTE: This is a standalone script (run directly, not via pytest). It defines a
+helper named ``test()`` which pytest misreads as a test function. Skip pytest
+collection entirely — execute with ``python -m tests.system_integration_test``.
 """
+
+import pytest
+
+# This module is a manual integration script, not a pytest test suite.
+pytestmark = pytest.mark.skip(reason="standalone script; run via python -m tests.system_integration_test")
 
 import json
 import os

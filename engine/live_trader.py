@@ -126,12 +126,22 @@ class LiveTrader:
         er = p['expected_return']
         conf = p['confidence']
 
-        # RL-LightGBM fusion: if RL disagrees with high confidence, RL vetoes
-        if rl_action and rl_action in ('long', 'short'):
+        # RL-LightGBM fusion: if RL disagrees with high confidence, RL vetoes.
+        # rl.predict() returns a list[dict]; extract the RL direction from it.
+        # (Previously this compared a list to a string, so the veto was dead code.)
+        rl_dir = None
+        if rl_action:
+            try:
+                rl_er = rl_action[-1].get('expected_return', 0)
+                rl_dir = 'long' if rl_er > 0.001 else 'short' if rl_er < -0.001 else None
+            except (IndexError, AttributeError, TypeError):
+                rl_dir = None
+
+        if rl_dir in ('long', 'short'):
             lgbm_action = 'long' if er > 0.001 else 'short' if er < -0.001 else 'hold'
-            if lgbm_action != rl_action and lgbm_action != 'hold':
-                logger.info(f"[DUAL] RL({rl_action}) vs LGBM({lgbm_action}) — RL overrides")
-                er = 0.003 if rl_action == 'long' else -0.003
+            if lgbm_action != rl_dir and lgbm_action != 'hold':
+                logger.info(f"[DUAL] RL({rl_dir}) vs LGBM({lgbm_action}) — RL overrides")
+                er = 0.003 if rl_dir == 'long' else -0.003
                 conf = max(conf, 0.65)
 
         if conf < MIN_CONFIDENCE:

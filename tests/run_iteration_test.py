@@ -11,8 +11,8 @@ def run_test(pair_safe, pair_name, lev, pos, sl, conf, n_max=200):
     df = pd.read_feather(f'user_data/data/okx/{pair_safe}-4h-futures.feather')
     df['date'] = pd.to_datetime(df['date']); df = df.sort_values('date')
 
-    from freqtrade.ai.features import FeatureEngineer
-    from freqtrade.ai.direction_predictor import DirectionPredictor
+    from engine.features import FeatureEngineer
+    from engine.direction_predictor import DirectionPredictor
     fe = FeatureEngineer(); features = fe.compute_price_features(df)
     dp = DirectionPredictor(model_dir=MD)
     try: dp.load()

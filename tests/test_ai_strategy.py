@@ -1,8 +1,14 @@
 """Integration test: AIStrategy as a freqtrade strategy."""
 
+import pytest
+
+# AIStrategy subclasses freqtrade's IStrategy — without freqtrade installed
+# (we run standalone engine/), this whole module cannot execute. Skip cleanly
+# rather than error on every import.
+pytest.importorskip("freqtrade")
+
 import numpy as np
 import pandas as pd
-import pytest
 
 
 @pytest.fixture
@@ -44,7 +50,7 @@ class TestAIStrategy:
 
     def test_populate_indicators_adds_features(self, mock_config):
         """Strategy must add AI features to the dataframe."""
-        from freqtrade.ai.ai_strategy import AIStrategy
+        from engine.ai_strategy import AIStrategy
 
         strategy = AIStrategy(mock_config)
         df = make_ohlcv(200)
@@ -59,7 +65,7 @@ class TestAIStrategy:
 
     def test_populate_entry_trend_sets_signals(self, mock_config):
         """AI must set entry signals on the last candle."""
-        from freqtrade.ai.ai_strategy import AIStrategy
+        from engine.ai_strategy import AIStrategy
 
         strategy = AIStrategy(mock_config)
         df = make_ohlcv(200)
@@ -75,28 +81,28 @@ class TestAIStrategy:
 
     def test_strategy_can_short(self, mock_config):
         """AI strategy must support shorting."""
-        from freqtrade.ai.ai_strategy import AIStrategy
+        from engine.ai_strategy import AIStrategy
 
         strategy = AIStrategy(mock_config)
         assert strategy.can_short is True
 
     def test_strategy_timeframe_4h(self, mock_config):
         """AI strategy operates on 4-hour candles."""
-        from freqtrade.ai.ai_strategy import AIStrategy
+        from engine.ai_strategy import AIStrategy
 
         strategy = AIStrategy(mock_config)
         assert strategy.timeframe == "4h"
 
     def test_trailing_stop_is_set(self, mock_config):
         """Trailing stop must be enabled as safety fallback."""
-        from freqtrade.ai.ai_strategy import AIStrategy
+        from engine.ai_strategy import AIStrategy
 
         strategy = AIStrategy(mock_config)
         assert strategy.trailing_stop is True
 
     def test_confirm_trade_entry_rejects_without_decision(self, mock_config):
         """Without an AI decision, all trades must be rejected."""
-        from freqtrade.ai.ai_strategy import AIStrategy
+        from engine.ai_strategy import AIStrategy
 
         strategy = AIStrategy(mock_config)
         strategy._last_decision = None
@@ -115,7 +121,7 @@ class TestAIStrategy:
 
     def test_confirm_trade_exit_always_allows(self, mock_config):
         """Exit must always be allowed for safety."""
-        from freqtrade.ai.ai_strategy import AIStrategy
+        from engine.ai_strategy import AIStrategy
 
         strategy = AIStrategy(mock_config)
         result = strategy.confirm_trade_exit(

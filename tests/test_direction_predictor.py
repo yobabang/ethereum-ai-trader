@@ -7,8 +7,10 @@ import pandas as pd
 def make_features(n_candles: int = 500) -> pd.DataFrame:
     """Generate feature DataFrame with a clear trend for testing."""
     np.random.seed(42)
-    # Strong upward trend with noise
-    close = 60000 + np.cumsum(np.random.randn(n_candles) * 200 + 15)
+    # Strong upward trend with noise. Drift (+80) is large relative to the
+    # noise scale (*200) so the trend is actually learnable — previously +15
+    # was drowned by noise, leaving the direction signal near-random.
+    close = 60000 + np.cumsum(np.random.randn(n_candles) * 200 + 80)
     high = close + np.abs(np.random.randn(n_candles) * 100)
     low = close - np.abs(np.random.randn(n_candles) * 100)
     open_ = low + np.random.rand(n_candles) * (high - low)
@@ -17,7 +19,7 @@ def make_features(n_candles: int = 500) -> pd.DataFrame:
         {"open": open_, "high": high, "low": low, "close": close, "volume": volume},
         index=pd.date_range("2026-06-01", periods=n_candles, freq="4h"),
     )
-    from freqtrade.ai.features import FeatureEngineer
+    from engine.features import FeatureEngineer
 
     return FeatureEngineer().compute_price_features(df)
 
@@ -27,7 +29,7 @@ class TestDirectionPredictor:
 
     def test_train_returns_metrics(self):
         """Training must return performance metrics."""
-        from freqtrade.ai.direction_predictor import DirectionPredictor
+        from engine.direction_predictor import DirectionPredictor
 
         df = make_features(500)
         pred = DirectionPredictor(model_dir="./tests/ai/test_dp_models")
@@ -42,7 +44,7 @@ class TestDirectionPredictor:
 
     def test_predict_returns_structured_output(self):
         """Predict must return expected_return, confidence, and max_drawdown."""
-        from freqtrade.ai.direction_predictor import DirectionPredictor
+        from engine.direction_predictor import DirectionPredictor
 
         df = make_features(500)
         pred = DirectionPredictor(model_dir="./tests/ai/test_dp_models")
@@ -63,7 +65,7 @@ class TestDirectionPredictor:
 
     def test_confidence_lower_when_uncertain(self):
         """Confidence must decrease as prediction difficulty increases."""
-        from freqtrade.ai.direction_predictor import DirectionPredictor
+        from engine.direction_predictor import DirectionPredictor
 
         # Train on trending data
         df = make_features(500)
@@ -86,7 +88,7 @@ class TestDirectionPredictor:
 
     def test_direction_accuracy_better_than_random(self):
         """Direction accuracy must exceed 50% (better than coin flip)."""
-        from freqtrade.ai.direction_predictor import DirectionPredictor
+        from engine.direction_predictor import DirectionPredictor
 
         df = make_features(600)
         pred = DirectionPredictor(model_dir="./tests/ai/test_dp_models")
@@ -102,13 +104,13 @@ class TestDirectionPredictor:
 
     def test_save_load_roundtrip(self):
         """Model must survive save/load cycle."""
-        from freqtrade.ai.direction_predictor import DirectionPredictor
+        from engine.direction_predictor import DirectionPredictor
 
         df = make_features(400)
         pred = DirectionPredictor(model_dir="./tests/ai/test_dp_models")
         pred.train(df)
 
-        test_df = make_features(30)
+        test_df = make_features(60)
         before = pred.predict(test_df)
 
         pred2 = DirectionPredictor(model_dir="./tests/ai/test_dp_models")
@@ -121,8 +123,8 @@ class TestDirectionPredictor:
 
     def test_untrained_raises(self):
         """Must error if not trained."""
-        from freqtrade.ai.direction_predictor import DirectionPredictor
+        from engine.direction_predictor import DirectionPredictor
 
         pred = DirectionPredictor(model_dir="/tmp/nonexist_dp")
         with __import__("pytest").raises(RuntimeError, match="not trained"):
-            pred.predict(make_features(20))
+            pred.predict(make_features(60))

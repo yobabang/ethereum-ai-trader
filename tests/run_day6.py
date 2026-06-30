@@ -16,9 +16,9 @@ t0 = time.time()
 
 # T1: Data Pipeline
 print('\n[T1] Data Pipeline')
-from freqtrade.ai.features import FeatureEngineer
-from freqtrade.ai.direction_predictor import DirectionPredictor
-from freqtrade.ai.regime_classifier import RegimeClassifier
+from engine.features import FeatureEngineer
+from engine.direction_predictor import DirectionPredictor
+from engine.regime_classifier import RegimeClassifier
 fe = FeatureEngineer()
 for ps in ['BTC_USDT_USDT', 'ETH_USDT_USDT']:
     df = pd.read_feather('user_data/data/okx/' + ps + '-4h-futures.feather')
@@ -42,7 +42,7 @@ assert valid_r > 0 and valid_d > 0
 
 # T3: Safety Rules
 print('\n[T3] Safety Rules')
-from freqtrade.ai.decision_arbitrator import DecisionArbitrator, RiskCalculator, Action
+from engine.decision_arbitrator import DecisionArbitrator, RiskCalculator, Action
 arb = DecisionArbitrator(RiskCalculator())
 all_safe = True
 tests = [
@@ -97,7 +97,7 @@ results['ema_delta'] = dlt
 
 # T5: Full backtest
 print('\n[T5] Full Backtest (optimized configs)')
-from freqtrade.ai.backtest_adapter import AIBacktestAdapter
+from engine.backtest_adapter import AIBacktestAdapter
 for pn, ps in [('BTC/USDT:USDT','BTC_USDT_USDT'),('ETH/USDT:USDT','ETH_USDT_USDT')]:
     df = pd.read_feather('user_data/data/okx/' + ps + '-4h-futures.feather')
     t1 = time.time()
