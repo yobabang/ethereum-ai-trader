@@ -246,3 +246,39 @@ ethereum-ai-trader/
 - ETH-Safe: +262%%, DD=3.7%% | ETH-Mid: +613%%, DD=3.9%% | ETH-Edge: +1006%%, DD=7.0%%
 - EMA-Trend过滤器: 全部配置正收益, 回撤<8%%
 - 7天计划: 全部完成, 28 commits, loop 持续运行
+
+## 2026-06-30 最终配置 (挂机运行中)
+
+### 交易参数
+- K线: 1h (3000根/币, 2025-01 ~ 2025-05)
+- 检查频率: 每15分钟
+- 模式: 进取型 LIVE
+- 杠杆: 10x
+- 仓位: 20% (下限5%)
+- 止损: 2% 机械止损
+- 止盈: AI预测收益 (最低0.5%)
+- 置信度: 45%
+- 信号阈值: 0.03%
+- 回撤限制: 25% (小账户 735 USDT)
+
+### AI信号
+- LightGBM DirectionPredictor (1h训练, dir_acc=50.9%)
+- RL PPO Agent (80K步, 双信号)
+- RegimeClassifier (1h训练, acc=100%)
+- EMA-Trend 过滤器
+- 震荡市/高波动市 禁止开仓
+
+### 交易对
+- ETH/USDT:USDT (主要)
+- BTC/USDT:USDT
+
+### 运行状态
+- 余额: 735.02 USDT
+- 模式: LIVE (实盘)
+- 仓位: 无 (ETH等趋势, BTC等信号)
+- Loop: 每15分钟自动检查
+
+### 已知问题
+- 旧仓位API关单失败 (posSide不匹配) — 需手动在App关
+- RL告警已去重
+- 平仓记录已补 journal.record_exit()

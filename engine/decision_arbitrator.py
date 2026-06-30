@@ -311,7 +311,7 @@ class DecisionArbitrator:
 
         # ---- Rule 3: Drawdown risk too high → hold (relaxed for small accounts) ----
         max_loss = abs(max_drawdown) * account_equity
-        drawdown_pct_threshold = 0.15 if account_equity < 2000 else 0.05
+        drawdown_pct_threshold = 0.25 if account_equity < 1000 else (0.15 if account_equity < 2000 else 0.05)
         if max_loss > account_equity * drawdown_pct_threshold:
             return self._hold(f"Max drawdown risk ${max_loss:.0f} > {drawdown_pct_threshold*100:.0f}% equity")
 

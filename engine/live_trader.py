@@ -39,15 +39,15 @@ OKX_CONFIG = {
 }
 
 PAIRS = ['ETH/USDT:USDT', 'BTC/USDT:USDT']
-TIMEFRAME = '4h'
-CHECK_INTERVAL_MINUTES = 3  # Check every 3 minutes
+TIMEFRAME = '1h'
+CHECK_INTERVAL_MINUTES = 15  # Check every 15 minutes
 
 # Risk params (from iteration tests)
-LEVERAGE = 50
+LEVERAGE = 10
 POSITION_PCT = 0.20
 STOP_LOSS_PCT = 0.08
-MIN_CONFIDENCE = 0.50  # Lowered for low-vol BTC/ETH
-MIN_SIGNAL = 0.0005  # 0.05% threshold
+MIN_CONFIDENCE = 0.45  # Aggressive mode
+MIN_SIGNAL = 0.0003  # 0.03%
 
 
 class LiveTrader:
@@ -149,7 +149,7 @@ class LiveTrader:
         atr_pct = float(features['atr_ratio'].iloc[-1]) if 'atr_ratio' in features.columns else 0.015
 
         decision = arb.decide(
-            account_equity=1000.0, current_positions=[],
+            account_equity=735.0, current_positions=[],
             regime='TRENDING_WEAK', expected_return=er,
             confidence=conf, max_drawdown=p['max_drawdown'],
             atr_pct=atr_pct,
