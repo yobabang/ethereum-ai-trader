@@ -21,7 +21,9 @@ from typing import Optional
 
 import ccxt
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', stream=sys.stdout, force=True)
+# Force unbuffered output for real-time monitoring
+sys.stdout.reconfigure(line_buffering=True) if hasattr(sys.stdout, 'reconfigure') else None
 logger = logging.getLogger(__name__)
 
 MD = Path('./models')

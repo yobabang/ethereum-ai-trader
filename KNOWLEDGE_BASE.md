@@ -282,3 +282,41 @@ ethereum-ai-trader/
 - 旧仓位API关单失败 (posSide不匹配) — 需手动在App关
 - RL告警已去重
 - 平仓记录已补 journal.record_exit()
+
+## 2026-06-30 11:20 会话状态
+
+### 运行总结
+- 交易员已停止 (手动kill)
+- BTC SHORT 0.01 @ $59,894.70 (30x, isolated) 需手动平仓
+- ETH: 全天被 EMA-Trend 拦截 (价格在EMA50上方, AI看空不逆势)
+- 余额: 734.99 USDT
+
+### 今日开单
+- 1笔 BTC SHORT (11:11 UTC, 输出丢失周期)
+- 0笔 ETH (Counter-trend blocked)
+
+### 当前配置
+- 1h K线, 15分钟检查
+- 进取型: 10x, 20%仓, 8%止损, 45%置信度, 0.03%信号
+- RL双信号加载正常
+- TP基于AI预测, SL机械2%
+
+### 已修复问题
+- 平仓记录 journal.record_exit()
+- RL告警去重
+- 输出缓冲 → unbuffered
+- 账户权益735 → 回撤阈值25%
+- posSide参数修复 (long_short_mode)
+- 仓位叠加检查 (fetch_position before entry)
+- 1h数据下载+重训练
+
+### 已知遗留
+- 旧仓位API关单失败 (posSide不匹配, 需App手动关)
+- RL模型使用4h数据训练, 1h模型待重训练
+- ETH EMA-Trend 过滤器可能过于严格
+
+### 待办
+- [ ] 手动平 BTC 仓位
+- [ ] RL模型用1h数据重训练
+- [ ] ETH: 评估EMA-Trend过滤器是否需要调整
+- [ ] 下次启动前确认: 无旧仓位, 无旧委托单
