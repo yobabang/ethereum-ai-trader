@@ -10,6 +10,8 @@ config.json
 # ===== MODELS (large binary files) =====
 models/*.pkl
 models/*.joblib
+models/*.zip
+models/rl_train_config.json
 
 # ===== DATA (large) =====
 user_data/
