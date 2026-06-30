@@ -279,6 +279,20 @@ class LiveTrader:
             except Exception as sle:
                 logger.warning(f"  SL FAILED: {sle}")
 
+            # AI Take-profit: based on predicted return
+            expected_ret = abs(decision.get('expected_return', 0.005))
+            tp_pct = max(expected_ret, 0.005)  # minimum 0.5% TP
+            tp_price = round(price * (1 - tp_pct) if okx_side == 'sell' else price * (1 + tp_pct), 2)
+            try:
+                self.exchange.create_order(
+                    symbol=pair, type='limit', side=sl_side,
+                    amount=0.01, price=tp_price,
+                    params={'reduceOnly': True, 'posSide': 'short' if side == 'short' else 'long'}
+                )
+                logger.info(f"  TP: {sl_side} @ ${tp_price:,.2f} (AI target {tp_pct*100:.1f}%)")
+            except Exception as tpe:
+                logger.warning(f"  TP FAILED: {tpe}")
+
         except Exception as e:
             logger.error(f"  ORDER FAILED: {e}")
 
