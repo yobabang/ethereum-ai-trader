@@ -15,7 +15,7 @@ export function EquityCurve({ data }: { data: EquityPoint[] }) {
 
   const chartData = data.map((d) => ({
     ...d,
-    time: new Date(d.date).toLocaleDateString("zh-CN", {
+    time: new Date(d.timestamp).toLocaleDateString("zh-CN", {
       month: "short",
       day: "numeric",
     }),

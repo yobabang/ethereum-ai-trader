@@ -1,51 +1,34 @@
-# ===== SENSITIVE FILES =====
-api.txt
-config.json
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Environment
 .env
-*.key
-*.pem
-*secret*
-*password*
+.venv/
 
-# ===== MODELS (large binary files) =====
-models/*.pkl
-models/*.joblib
-models/*.zip
-models/rl_train_config.json
-
-# ===== DATA (large) =====
+# Runtime data
+sim_trader.db
 user_data/
-*.feather
-*.parquet
-
-# ===== JOURNAL (runtime data) =====
 journal/
+models/*.json
+models/*.pkl
+models/*.zip
 
-# ===== REPORTS (generated) =====
+# Reports (generated)
 reports/*.docx
 reports/*.json
 
-# ===== PYTHON =====
-__pycache__/
-*.pyc
-.venv/
-*.egg-info/
-dist/
-build/
-
-# ===== DOCKER =====
-pgdata/
-
-# ===== IDE =====
+# IDE
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# ===== HOOK CACHE =====
-.claude/sdd-cache/
-.claude/.simplify-ignore-cache/
-
-# ===== OS =====
+# OS
 .DS_Store
 Thumbs.db
+~$*.docx
+
+# agent-skills
+.claude/sdd-cache/
+.claude/.simplify-ignore-cache/
+web/node_modules/

@@ -1,0 +1,5 @@
+apikey = "cd8187e4-7ad7-4abc-bf10-ca3413a6cb38"
+secretkey = "372C958FD90DF5C784CB49FA38C25899"
+IP = "192.168.10.199"
+备注名 = "30415918@qq.com"
+权限 = "读取/交易"

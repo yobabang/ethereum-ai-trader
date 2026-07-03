@@ -1,54 +1,89 @@
-/** API client for freqtrade REST API + AI endpoints. */
+/** API client for the simulation trading platform (v0.2.0).
+ *
+ * Talks to our FastAPI backend (engine/api_bridge.py) at /api/v1/trade/*.
+ * Falls back to mock data when the backend is unavailable (dev mode).
+ *
+ * Mock data is ALWAYS tagged with _source: "mock" so the UI can show a badge
+ * — never silently present fake numbers as real (trust is core to this platform).
+ */
 
 const BASE = "/api/v1";
 
-export interface BotStatus {
-  state: string;
+// ---------------------------------------------------------------------------
+// Types — all carry an optional _source so callers can tell real from mock
+// ---------------------------------------------------------------------------
+
+export type DataSource = "real" | "mock";
+
+export interface AccountSummary {
+  _source?: DataSource;
+  initial_equity: number;
   equity: number;
-  daily_pnl: number;
-  daily_pnl_pct: number;
+  balance: number;
+  unrealized_pnl: number;
+  today_pnl: number;
+  today_pnl_pct: number;
   open_positions: number;
-  ai_status: string;
-  ai_last_train: string;
-  adaptive_confidence: number;
-  adaptive_position_scalar: number;
-  per_trade_max_loss: number;
-  current_regime: string;
-  allowed_to_trade: boolean;
+  total_trades: number;
+  win_rate: number;
+  max_drawdown: number;
 }
 
 export interface Position {
+  _source?: DataSource;
+  id: number;
   pair: string;
   side: "long" | "short";
-  amount: number;
   entry_price: number;
   current_price: number;
-  pnl: number;
-  pnl_pct: number;
-  stop_loss: number;
+  contracts: number;
+  margin: number;
   leverage: number;
+  sl_price: number;
+  tp_price: number;
+  unrealized_pnl: number;
+  roe_pct: number;
+  funding_paid: number;
+  entry_time: string;
+  ai_confidence: number | null;
+  ai_reason: string | null;
+  mode: string;
 }
 
-export interface Trade {
+export interface Order {
+  _source?: DataSource;
   id: number;
   pair: string;
   side: string;
-  entry_date: string;
-  exit_date: string | null;
+  status: string;
   entry_price: number;
+  entry_time: string;
   exit_price: number | null;
-  amount: number;
-  profit: number | null;
-  profit_pct: number | null;
+  exit_time: string | null;
   exit_reason: string | null;
+  contracts: number;
+  margin: number;
+  leverage: number;
+  sl_price: number;
+  tp_price: number;
+  realized_pnl: number;
+  funding_paid: number;
+  ai_confidence: number | null;
+  ai_reason: string | null;
+  mode: string;
 }
 
 export interface EquityPoint {
-  date: string;
+  _source?: DataSource;
+  timestamp: string;
   equity: number;
+  balance: number;
+  unrealized_pnl: number;
+  open_positions: number;
 }
 
 export interface AiDecision {
+  _source?: DataSource;
   action: string;
   reason: string;
   confidence: number;
@@ -60,98 +95,112 @@ export interface AiDecision {
   timestamp: string;
 }
 
+// ---------------------------------------------------------------------------
+// Fetch helper — tags real data
+// ---------------------------------------------------------------------------
+
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
   return res.json();
 }
 
-export async function getStatus(): Promise<BotStatus> {
-  // Freqtrade status endpoint + AI extensions
-  try {
-    const data = await fetchJson<any>(`${BASE}/status`);
-    const equity = data?.account_balance ?? 0;
-    const state = data?.state ?? "stopped";
+function tagReal<T>(data: T): T {
+  return { ...data, _source: "real" as const };
+}
 
-    return {
-      state,
-      equity,
-      daily_pnl: 0,
-      daily_pnl_pct: 0,
-      open_positions: data?.open_trades ?? 0,
-      ai_status: "ready",
-      ai_last_train: "--",
-      adaptive_confidence: data?.adaptive_confidence_threshold ?? 0.55,
-      adaptive_position_scalar: data?.adaptive_position_scalar ?? 1.0,
-      per_trade_max_loss: 0.08,
-      current_regime: data?.current_regime ?? "TRENDING_WEAK",
-      allowed_to_trade: data?.allowed_to_trade ?? true,
-    };
+function tagRealArray<T extends object>(arr: T[]): T[] {
+  return arr.map((x) => ({ ...x, _source: "real" as const }));
+}
+
+// ---------------------------------------------------------------------------
+// API functions (with mock fallback, mock always tagged)
+// ---------------------------------------------------------------------------
+
+export async function getAccount(): Promise<AccountSummary> {
+  try {
+    const data = await fetchJson<AccountSummary>(`${BASE}/trade/account`);
+    return tagReal(data);
   } catch {
-    // Return mock data when backend is unavailable (dev mode)
     return {
-      state: "running",
-      equity: 52380,
-      daily_pnl: 1240,
-      daily_pnl_pct: 2.43,
-      open_positions: 2,
-      ai_status: "学习完成",
-      ai_last_train: "4h前",
-      adaptive_confidence: 0.55,
-      adaptive_position_scalar: 1.0,
-      per_trade_max_loss: 0.08,
-      current_regime: "TRENDING_WEAK",
-      allowed_to_trade: true,
+      _source: "mock",
+      initial_equity: 1000,
+      equity: 1047.5,
+      balance: 892.3,
+      unrealized_pnl: 155.2,
+      today_pnl: 47.5,
+      today_pnl_pct: 4.75,
+      open_positions: 1,
+      total_trades: 23,
+      win_rate: 0.56,
+      max_drawdown: 0.083,
     };
   }
 }
 
 export async function getPositions(): Promise<Position[]> {
   try {
-    const data = await fetchJson<any[]>(`${BASE}/positions`);
-    return data.map((p: any) => ({
-      pair: p.pair,
-      side: p.is_short ? "short" : "long",
-      amount: p.amount,
-      entry_price: p.open_rate,
-      current_price: p.current_rate ?? p.open_rate,
-      pnl: p.profit_ratio ?? 0,
-      pnl_pct: (p.profit_ratio ?? 0) * 100,
-      stop_loss: p.stop_loss ?? 0,
-      leverage: p.leverage ?? 1,
-    }));
+    const data = await fetchJson<{ positions: Position[]; count: number }>(
+      `${BASE}/trade/positions`
+    );
+    return tagRealArray(data.positions ?? []);
   } catch {
     return [
-      { pair: "BTC/USDT:USDT", side: "long", amount: 0.08, entry_price: 4120, current_price: 4440, pnl: 320, pnl_pct: 3.2, stop_loss: 4020, leverage: 3 },
-      { pair: "ETH/USDT:USDT", side: "short", amount: 1.5, entry_price: 3800, current_price: 3715, pnl: -85, pnl_pct: -0.85, stop_loss: 3920, leverage: 3 },
+      {
+        _source: "mock",
+        id: 1, pair: "ETH/USDT:USDT", side: "short",
+        entry_price: 3450, current_price: 3395, contracts: 1.2,
+        margin: 414, leverage: 3, sl_price: 3520, tp_price: 3380,
+        unrealized_pnl: 66, roe_pct: 15.9, funding_paid: -0.5,
+        entry_time: new Date(Date.now() - 3600000).toISOString(),
+        ai_confidence: 0.72, ai_reason: "downtrend", mode: "trend",
+      },
     ];
   }
 }
 
-export async function getTrades(): Promise<Trade[]> {
+export async function getOrders(limit: number = 50): Promise<Order[]> {
   try {
-    const data = await fetchJson<any>(`${BASE}/trades?limit=20`);
-    return data.trades ?? [];
+    const data = await fetchJson<{ orders: Order[]; count: number }>(
+      `${BASE}/trade/orders?limit=${limit}`
+    );
+    return tagRealArray(data.orders ?? []);
   } catch {
     return [
-      { id: 1, pair: "ETH/USDT:USDT", side: "short", entry_date: "2026-06-28T14:32:00", exit_date: null, entry_price: 3800, exit_price: null, amount: 1.5, profit: null, profit_pct: null, exit_reason: null },
-      { id: 2, pair: "BTC/USDT:USDT", side: "long", entry_date: "2026-06-28T10:15:00", exit_date: "2026-06-28T12:30:00", entry_price: 60200, exit_price: 60880, amount: 0.05, profit: 680, profit_pct: 4.8, exit_reason: "ai_reversal" },
-      { id: 3, pair: "BTC/USDT:USDT", side: "long", entry_date: "2026-06-28T06:48:00", exit_date: "2026-06-28T09:20:00", entry_price: 59800, exit_price: 60200, amount: 0.05, profit: 400, profit_pct: 3.2, exit_reason: "ai_take_profit" },
+      { _source: "mock", id: 3, pair: "ETH/USDT:USDT", side: "short", status: "closed",
+        entry_price: 3480, entry_time: new Date(Date.now() - 7200000).toISOString(),
+        exit_price: 3525, exit_time: new Date(Date.now() - 6600000).toISOString(),
+        exit_reason: "stop_loss", contracts: 1.0, margin: 348, leverage: 3,
+        sl_price: 3525, tp_price: 3380, realized_pnl: -45, funding_paid: 0.2,
+        ai_confidence: 0.68, ai_reason: "downtrend", mode: "trend" },
+      { _source: "mock", id: 2, pair: "BTC/USDT:USDT", side: "long", status: "closed",
+        entry_price: 59200, entry_time: new Date(Date.now() - 10800000).toISOString(),
+        exit_price: 59580, exit_time: new Date(Date.now() - 9600000).toISOString(),
+        exit_reason: "take_profit", contracts: 0.05, margin: 296, leverage: 3,
+        sl_price: 58800, tp_price: 59580, realized_pnl: 38, funding_paid: 0.1,
+        ai_confidence: 0.75, ai_reason: "uptrend", mode: "ai" },
     ];
   }
 }
 
-export async function getEquityHistory(): Promise<EquityPoint[]> {
+export async function getEquityHistory(days: number = 7): Promise<EquityPoint[]> {
   try {
-    return await fetchJson<EquityPoint[]>(`${BASE}/equity`);
+    const data = await fetchJson<{ snapshots: EquityPoint[]; count: number }>(
+      `${BASE}/trade/equity?days=${days}`
+    );
+    return tagRealArray(data.snapshots ?? []);
   } catch {
-    // Generate mock 7-day equity curve
+    // Mock 7-day curve
     const points: EquityPoint[] = [];
-    let equity = 50000;
+    let equity = 1000;
     for (let i = 168; i >= 0; i--) {
       const d = new Date(Date.now() - i * 3600000);
-      equity += (Math.random() - 0.48) * 300;
-      points.push({ date: d.toISOString(), equity: Math.round(equity) });
+      equity += (Math.random() - 0.48) * 8;
+      points.push({
+        _source: "mock",
+        timestamp: d.toISOString(), equity: Math.round(equity * 100) / 100,
+        balance: equity - 50, unrealized_pnl: 50, open_positions: 1,
+      });
     }
     return points;
   }
@@ -159,16 +208,18 @@ export async function getEquityHistory(): Promise<EquityPoint[]> {
 
 export async function getAiDecision(): Promise<AiDecision | null> {
   try {
-    return await fetchJson<AiDecision>(`${BASE}/ai/decision`);
+    const data = await fetchJson<AiDecision>(`${BASE}/ai/decision`);
+    return tagReal(data);
   } catch {
     return {
-      action: "LONG",
-      reason: "TRENDING_STRONG | expected_return=0.0150 | confidence=0.75 | size=15% | SL=1.5% | TP=3.8% | lev=3x",
-      confidence: 0.75,
-      expected_return: 0.015,
-      position_size_pct: 0.15,
-      stop_loss_pct: 0.015,
-      take_profit_pct: 0.038,
+      _source: "mock",
+      action: "SHORT",
+      reason: "trend_filter: downtrend confirmed | ema9/100 | slope=True",
+      confidence: 0.72,
+      expected_return: -0.015,
+      position_size_pct: 0.12,
+      stop_loss_pct: 0.02,
+      take_profit_pct: 0.04,
       leverage: 3,
       timestamp: new Date().toISOString(),
     };
@@ -176,9 +227,25 @@ export async function getAiDecision(): Promise<AiDecision | null> {
 }
 
 export async function sendControl(action: "start" | "stop"): Promise<void> {
-  await fetch(`${BASE}/control`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action }),
-  });
+  // Reserved for future manual control; backend endpoint not yet implemented
+  console.log(`Control action (stub): ${action}`);
+}
+
+// ---------------------------------------------------------------------------
+// Helper: detect if any of the fetched datasets is mock
+// ---------------------------------------------------------------------------
+
+export function isAnyMock(
+  account: AccountSummary | null,
+  positions: Position[],
+  orders: Order[],
+  equity: EquityPoint[],
+  decision: AiDecision | null
+): boolean {
+  if (account?._source === "mock") return true;
+  if (positions.some((p) => p._source === "mock")) return true;
+  if (orders.some((o) => o._source === "mock")) return true;
+  if (equity.some((e) => e._source === "mock")) return true;
+  if (decision?._source === "mock") return true;
+  return false;
 }
