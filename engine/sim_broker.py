@@ -34,8 +34,10 @@ MAX_CONCURRENT_PER_PAIR = 1 # one position per pair (no hedging)
 FUNDING_HOURS = (0, 8, 16)  # UTC settlement times
 
 OKX_TICKER_URL = "https://www.okx.com/api/v5/market/ticker?instId={}"
+OKX_CANDLE_URL = "https://www.okx.com/api/v5/market/candles?instId={}&bar=1m&limit=1"
 OKX_FUNDING_URL = "https://www.okx.com/api/v5/public/funding-rate?instId={}"
 BINANCE_TICKER_URL = "https://api.binance.com/api/v3/ticker/price?symbol={}"
+BINANCE_CANDLE_URL = "https://api.binance.com/api/v3/klines?symbol={}&interval=1m&limit=1"
 BINANCE_FUNDING_URL = "https://fapi.binance.com/fapi/v1/fundingRate?symbol={}&limit=1"
 
 # Map our pair format to exchange instrument ids
@@ -156,6 +158,64 @@ class SimBroker:
             logger.warning(f"{pair}: market data fail #{self._ticker_fail_count[pair]}, using cached")
             return self._last_ticker[pair]
         raise MarketDataError(f"Cannot fetch ticker for {pair} (both sources failed)")
+
+    def get_ticker_range(self, pair: str) -> tuple[float, float, float]:
+        """Fetch last price + high + low of the latest 1m candle.
+
+        Used for intrabar SL/TP checking — detects price spikes that a
+        last-price-only check would miss. Falls back to get_ticker() if
+        candle fetch fails (returns (price, price, price) as approximation).
+
+        Returns: (last, high, low)
+        """
+        # Try OKX candle
+        result = self._fetch_okx_candle(pair)
+        if result is not None:
+            return result
+        # Fallback Binance candle
+        result = self._fetch_binance_candle(pair)
+        if result is not None:
+            return result
+        # Fallback: last price only (no intrabar range)
+        try:
+            price = self.get_ticker(pair)
+            return (price, price, price)
+        except MarketDataError:
+            raise
+
+    def _fetch_okx_candle(self, pair: str) -> Optional[tuple[float, float, float]]:
+        """Fetch latest 1m candle (last, high, low) from OKX."""
+        inst = OKX_INST.get(pair)
+        if not inst:
+            return None
+        try:
+            r = requests.get(OKX_CANDLE_URL.format(inst), timeout=8)
+            r.raise_for_status()
+            data = r.json().get("data", [])
+            if data:
+                # OKX format: [ts, open, high, low, close, vol, ...]
+                candle = data[0]
+                return (float(candle[4]), float(candle[2]), float(candle[3]))  # (close=last, high, low)
+        except Exception as e:
+            logger.debug(f"OKX candle fail for {pair}: {e}")
+        return None
+
+    def _fetch_binance_candle(self, pair: str) -> Optional[tuple[float, float, float]]:
+        """Fetch latest 1m candle (last, high, low) from Binance."""
+        sym = BINANCE_INST.get(pair)
+        if not sym:
+            return None
+        try:
+            r = requests.get(BINANCE_CANDLE_URL.format(sym), timeout=8)
+            r.raise_for_status()
+            data = r.json()
+            if data:
+                # Binance format: [open_time, open, high, low, close, vol, ...]
+                candle = data[0]
+                return (float(candle[4]), float(candle[2]), float(candle[3]))  # (close=last, high, low)
+        except Exception as e:
+            logger.debug(f"Binance candle fail for {pair}: {e}")
+        return None
 
     def _fetch_okx_ticker(self, pair: str) -> Optional[float]:
         inst = OKX_INST.get(pair)
@@ -316,11 +376,17 @@ class SimBroker:
     # ------------------------------------------------------------------
 
     def check_positions(self):
-        """Check all open positions for SL/TP/liquidation. Call every ~5s."""
+        """Check all open positions for SL/TP/liquidation. Call every ~5s.
+
+        Uses intrabar high/low for SL/TP detection — detects price spikes
+        that a last-price-only check would miss. SL takes priority when both
+        SL and TP are hit in the same bar (conservative).
+        """
         for pos_id in list(self.open_positions.keys()):
             pos = self.open_positions[pos_id]
             try:
-                price = self.get_ticker(pos.pair)
+                # Fetch last + high + low for intrabar SL/TP checking
+                last, high, low = self.get_ticker_range(pos.pair)
             except MarketDataError:
                 logger.warning(f"Skip SL/TP check for {pos.pair}: no market data")
                 continue
@@ -328,22 +394,29 @@ class SimBroker:
             # Funding settlement (may accrue before checking SL/TP)
             self._maybe_settle_funding(pos)
 
-            # Liquidation check first (most urgent)
+            # Liquidation check first (most urgent) — use intrabar extremes
             liq_price = self._liquidation_price(pos)
-            if self._is_liquidated(pos, price, liq_price):
-                self._liquidate(pos, price)
+            if pos.side == "long" and low <= liq_price:
+                self._liquidate(pos, liq_price)
+                continue
+            if pos.side == "short" and high >= liq_price:
+                self._liquidate(pos, liq_price)
                 continue
 
-            # SL/TP check (SL priority when both hit in same bar)
+            # SL/TP check with intrabar high/low (SL priority when both hit)
             if pos.side == "long":
-                if price <= pos.sl_price:
+                sl_hit = low <= pos.sl_price
+                tp_hit = high >= pos.tp_price
+                if sl_hit:
                     self._close(pos, pos.sl_price, "stop_loss")
-                elif price >= pos.tp_price:
+                elif tp_hit:
                     self._close(pos, pos.tp_price, "take_profit")
             else:
-                if price >= pos.sl_price:
+                sl_hit = high >= pos.sl_price
+                tp_hit = low <= pos.tp_price
+                if sl_hit:
                     self._close(pos, pos.sl_price, "stop_loss")
-                elif price <= pos.tp_price:
+                elif tp_hit:
                     self._close(pos, pos.tp_price, "take_profit")
 
     def _close(self, pos: OpenPosition, exit_price: float, reason: str):

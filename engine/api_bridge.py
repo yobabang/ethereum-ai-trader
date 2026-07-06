@@ -464,8 +464,69 @@ async def ws_klines(websocket: WebSocket, pair: str = "BTC/USDT:USDT"):
                 pass
 
 
-# POST /trade/manual and DELETE /trade/positions/{id} are reserved per SPEC §6.2
-# (manual trading not implemented in v0.2 — AI decisions only)
+# POST /trade/manual and DELETE /trade/positions/{id} — manual trading endpoints
+from pydantic import BaseModel
+
+
+class ManualOrderRequest(BaseModel):
+    """Request body for manual order placement."""
+    pair: str                                    # e.g. "BTC/USDT:USDT"
+    side: str                                    # "long" or "short"
+    position_size_pct: float = 0.10              # fraction of equity
+    leverage: int = 3
+    stop_loss_pct: float = 0.02
+    take_profit_pct: float = 0.04
+    confidence: float = 1.0                      # manual = max confidence
+    reason: str = "manual"
+
+
+@app.post("/api/v1/trade/manual")
+async def trade_manual(req: ManualOrderRequest):
+    """Place a manual order through the sim_broker.
+
+    Allows the operator to manually open a position (bypassing AI decision).
+    The order goes through the same sim_broker risk checks (margin, leverage cap,
+    duplicate pair rejection) — it's not a free pass to break risk rules.
+    """
+    broker = get_broker()
+    decision = {
+        "pair": req.pair,
+        "side": req.side,
+        "position_size_pct": req.position_size_pct,
+        "leverage": req.leverage,
+        "stop_loss_pct": req.stop_loss_pct,
+        "take_profit_pct": req.take_profit_pct,
+        "confidence": req.confidence,
+        "reason": req.reason,
+        "mode": "manual",
+        "aggressive": False,
+    }
+    pos_id = broker.open_order(decision)
+    if pos_id is None:
+        return {"success": False, "reason": "Broker rejected order (check risk limits/logs)"}
+    return {"success": True, "position_id": pos_id, "pair": req.pair, "side": req.side}
+
+
+@app.delete("/api/v1/trade/positions/{pos_id}")
+async def trade_close_position(pos_id: int):
+    """Manually close a position at current market price.
+
+    The position is closed through sim_broker (realizes PnL, deducts fees,
+    updates equity). This is the manual exit path — AI-managed positions
+    are normally closed by SL/TP/liquidation automatically.
+    """
+    broker = get_broker()
+    if pos_id not in broker.open_positions:
+        raise HTTPException(status_code=404, detail=f"Position {pos_id} not found or already closed")
+
+    pos = broker.open_positions[pos_id]
+    try:
+        price = broker.get_ticker(pos.pair)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Cannot fetch price: {e}")
+
+    broker._close(pos, price, "manual")
+    return {"success": True, "position_id": pos_id, "exit_price": price, "reason": "manual"}
 
 
 if __name__ == "__main__":
