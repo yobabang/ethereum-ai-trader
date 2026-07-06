@@ -334,9 +334,16 @@ class SimBroker:
         contracts = position_usdt / entry_price
         margin = position_usdt / leverage
 
+        # Allow up to 98% of balance (leave 2% for fees)
+        max_margin = self.balance * 0.98
         if margin > self.balance:
             logger.info(f"Reject {pair}: margin {margin:.2f} > balance {self.balance:.2f}")
             return None
+        if margin > max_margin:
+            margin = max_margin
+            position_usdt = margin * leverage
+            contracts = position_usdt / entry_price
+            logger.info(f"Capped {pair}: margin {margin:.2f} (=98% of balance)")
 
         # --- Compute SL/TP prices (price-level, not % of margin) ---
         # SPEC §4.1: sl_price = price * (1 - sl_pct/leverage) for long

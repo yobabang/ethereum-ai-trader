@@ -80,11 +80,11 @@ DEFAULTS = {
     "min_signal": 0.0003,
 }
 AGGRESSIVE = {
-    "leverage": 1000,   # effectively unlimited
+    "leverage": 10,   # 10x gives breathing room
     "position_pct": 1.0,
     "min_confidence": 0.45,
-    "stop_loss_pct": 0.015,
-    "take_profit_pct": 0.06,
+    "stop_loss_pct": 0.03,   # wider SL, fewer false stops
+    "take_profit_pct": 0.08,  # bigger TP target
     "min_signal": 0.0001,
 }
 
@@ -282,12 +282,12 @@ class LiveTrader:
             return {"action": "HOLD", "reason": "signal below noise floor",
                     "confidence": conf, "expected_return": er}
 
-        # EMA50 trend filter
-        e50 = df["close"].ewm(span=50).mean().iloc[-1]
-        pr = float(df["close"].iloc[-1])
-        if (er > 0 and pr < e50) or (er < 0 and pr > e50):
-            return {"action": "HOLD", "reason": "counter-trend blocked (EMA50)",
-                    "confidence": conf, "expected_return": er}
+        # EMA50 trend filter — DISABLED per user request
+        # e50 = df["close"].ewm(span=50).mean().iloc[-1]
+        # pr = float(df["close"].iloc[-1])
+        # if (er > 0 and pr < e50) or (er < 0 and pr > e50):
+        #     return {"action": "HOLD", "reason": "counter-trend blocked (EMA50)",
+        #             "confidence": conf, "expected_return": er}
 
         # Regime
         regime_list = self._rc.predict(features.iloc[-1:])
@@ -303,15 +303,20 @@ class LiveTrader:
             adaptive_position_scalar=1.0,
         )
 
+        # Override arbitrator output with aggressive params where applicable
+        pos_pct = max(decision.position_size_pct, self.params["position_pct"])
+        lev = max(decision.leverage, self.params["leverage"])
+        sl = max(decision.stop_loss_pct, self.params["stop_loss_pct"])
+        tp = max(decision.take_profit_pct, self.params["take_profit_pct"])
         return {
             "action": decision.action.value,
             "reason": decision.reason,
             "expected_return": er,
             "confidence": conf,
-            "position_size_pct": decision.position_size_pct,
-            "stop_loss_pct": decision.stop_loss_pct,
-            "take_profit_pct": decision.take_profit_pct,
-            "leverage": decision.leverage,
+            "position_size_pct": pos_pct,
+            "stop_loss_pct": sl,
+            "take_profit_pct": tp,
+            "leverage": lev,
             "regime": regime,
         }
 
@@ -465,12 +470,12 @@ class LiveTrader:
                 "take_profit_pct": decision.get("take_profit_pct", 0),
                 "leverage": decision.get("leverage", self.params["leverage"]),
                 "reason": decision.get("reason", ""),
-                "executed": action in ("LONG", "SHORT"),
+                "executed": action.upper() in ("LONG", "SHORT"),
                 "mode": self.mode,
                 "aggressive": self.aggressive,
             })
 
-            if action in ("LONG", "SHORT"):
+            if action.upper() in ("LONG", "SHORT"):
                 side = action.lower()
                 price = float(df["close"].iloc[-1])
                 logger.info(f"[SIGNAL] {pair} {action} @ ${price:,.2f} | {decision.get('reason', '')[:60]}")

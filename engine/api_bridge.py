@@ -292,65 +292,86 @@ def _get_model_dir() -> str:
 # ===========================================================================
 
 
+def _pair_to_inst(pair: str) -> str:
+    return "BTC-USDT-SWAP" if "BTC" in pair else "ETH-USDT-SWAP"
+
+
+def _get_price(pair: str, fallback: float) -> float:
+    try:
+        import requests
+        r = requests.get("https://www.okx.com/api/v5/market/ticker",
+                         params={"instId": _pair_to_inst(pair)}, timeout=3)
+        if r.ok and r.json().get("data"):
+            return float(r.json()["data"][0]["last"])
+    except Exception:
+        pass
+    return fallback
+
+
 @app.get("/api/v1/trade/account")
 async def trade_account():
-    """Account summary: equity, balance, unrealized PnL, today's PnL."""
-    broker = get_broker()
-    db = get_db()
-    stats = db.get_account_stats(broker.config.initial_equity)
-    unrealized = broker.total_unrealized()
-    equity = broker.total_equity()
-    balance = broker.balance
-    today_pnl = equity - broker.config.initial_equity  # simplified: total since start
-    today_pnl_pct = (today_pnl / broker.config.initial_equity * 100) if broker.config.initial_equity > 0 else 0
+    """Account summary — reads directly from database."""
+    import sqlite3
+    conn = sqlite3.connect("sim_trader.db")
+    initial = 1000.0
+
+    open_rows = conn.execute(
+        "SELECT pair, side, entry_price, contracts, margin FROM positions WHERE status='open'"
+    ).fetchall()
+
+    used_margin = sum(r[4] for r in open_rows)
+    closed_pnl = conn.execute(
+        "SELECT COALESCE(SUM(realized_pnl),0) FROM positions WHERE status!='open'"
+    ).fetchone()[0]
+    balance = initial - used_margin + closed_pnl
+
+    unrealized = 0.0
+    for r in open_rows:
+        pair, side, entry, contracts, margin = r
+        price = _get_price(pair, entry)
+        unrealized += contracts * (price - entry) if side == "long" else contracts * (entry - price)
+
+    equity = balance + unrealized
+    total_closed = conn.execute("SELECT COUNT(*) FROM positions WHERE status!='open'").fetchone()[0]
+    wins = conn.execute("SELECT COUNT(*) FROM positions WHERE status!='open' AND realized_pnl>0").fetchone()[0]
+    conn.close()
+
     return {
-        "initial_equity": round(broker.config.initial_equity, 2),
-        "equity": round(equity, 2),
-        "balance": round(balance, 2),
+        "initial_equity": initial, "equity": round(equity, 2), "balance": round(balance, 2),
         "unrealized_pnl": round(unrealized, 2),
-        "today_pnl": round(today_pnl, 2),
-        "today_pnl_pct": round(today_pnl_pct, 2),
-        "open_positions": len(broker.open_positions),
-        "total_trades": stats["total_trades"],
-        "win_rate": round(stats["win_rate"], 4),
-        "max_drawdown": round(stats["max_drawdown"], 4),
+        "today_pnl": round(equity - initial, 2),
+        "today_pnl_pct": round((equity - initial) / initial * 100, 2),
+        "open_positions": len(open_rows), "total_trades": total_closed,
+        "win_rate": round(wins / total_closed, 4) if total_closed else 0,
+        "max_drawdown": 0.0,
     }
 
 
 @app.get("/api/v1/trade/positions")
 async def trade_positions():
-    """Current open positions with unrealized PnL and ROE."""
-    broker = get_broker()
+    """Current open positions — reads directly from database."""
+    import sqlite3
+    conn = sqlite3.connect("sim_trader.db")
+    rows = conn.execute(
+        "SELECT id, pair, side, entry_price, contracts, margin, leverage, sl_price, tp_price, "
+        "funding_paid, entry_time, ai_confidence, ai_reason, mode FROM positions WHERE status='open'"
+    ).fetchall()
     positions = []
-    for pos in broker.open_positions.values():
-        try:
-            current_price = broker.get_ticker(pos.pair)
-        except Exception:
-            current_price = pos.entry_price
-        if pos.side == "long":
-            unrealized = pos.contracts * (current_price - pos.entry_price)
-        else:
-            unrealized = pos.contracts * (pos.entry_price - current_price)
-        roe = (unrealized / pos.margin * 100) if pos.margin > 0 else 0
+    for r in rows:
+        pid, pair, side, entry, contracts, margin, lev, sl, tp, funding, etime, conf, reason, mode = r
+        price = _get_price(pair, entry)
+        unrealized = contracts * (price - entry) if side == "long" else contracts * (entry - price)
         positions.append({
-            "id": pos.id,
-            "pair": pos.pair,
-            "side": pos.side,
-            "entry_price": round(pos.entry_price, 2),
-            "current_price": round(current_price, 2),
-            "contracts": round(pos.contracts, 6),
-            "margin": round(pos.margin, 2),
-            "leverage": pos.leverage,
-            "sl_price": round(pos.sl_price, 2),
-            "tp_price": round(pos.tp_price, 2),
+            "id": pid, "pair": pair, "side": side,
+            "entry_price": round(entry, 2), "current_price": round(price, 2),
+            "contracts": round(contracts, 6), "margin": round(margin, 2),
+            "leverage": lev, "sl_price": round(sl, 2), "tp_price": round(tp, 2),
             "unrealized_pnl": round(unrealized, 2),
-            "roe_pct": round(roe, 2),
-            "funding_paid": round(pos.funding_paid, 4),
-            "entry_time": pos.entry_time.isoformat(),
-            "ai_confidence": pos.ai_confidence,
-            "ai_reason": pos.ai_reason,
-            "mode": pos.mode,
+            "roe_pct": round(unrealized / margin * 100, 2) if margin else 0,
+            "funding_paid": round(funding, 4), "entry_time": etime,
+            "ai_confidence": conf, "ai_reason": reason, "mode": mode,
         })
+    conn.close()
     return {"positions": positions, "count": len(positions)}
 
 
@@ -397,71 +418,96 @@ async def trade_decisions(limit: int = 50):
 
 
 # ---------------------------------------------------------------------------
+# Market data REST endpoints (OKX public, no auth)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/market/klines")
+async def market_klines(symbol: str = "BTC/USDT:USDT", timeframe: str = "1h", limit: int = 200):
+    import requests
+    inst_map = {"BTC/USDT:USDT": "BTC-USDT-SWAP", "ETH/USDT:USDT": "ETH-USDT-SWAP"}
+    inst = inst_map.get(symbol, symbol.replace("/", "-").replace(":USDT", "-SWAP"))
+    tf_okx = timeframe.upper() if timeframe[-1].isdigit() else timeframe[:-1] + timeframe[-1].upper()
+    try:
+        r = requests.get("https://www.okx.com/api/v5/market/candles",
+                         params={"instId": inst, "bar": tf_okx, "limit": str(min(limit, 300))}, timeout=10)
+        r.raise_for_status()
+        rows = list(reversed(r.json().get("data", [])))
+        candles = [{"time": int(row[0]), "open": float(row[1]), "high": float(row[2]),
+                     "low": float(row[3]), "close": float(row[4]), "volume": float(row[5])}
+                   for row in rows]
+        return {"symbol": symbol, "timeframe": timeframe, "count": len(candles), "data": candles}
+    except Exception as e:
+        return {"error": str(e), "data": []}, 500
+
+@app.get("/api/v1/market/ticker")
+async def market_ticker(symbol: str = "BTC/USDT:USDT"):
+    import requests
+    inst_map = {"BTC/USDT:USDT": "BTC-USDT-SWAP", "ETH/USDT:USDT": "ETH-USDT-SWAP"}
+    inst = inst_map.get(symbol, symbol.replace("/", "-").replace(":USDT", "-SWAP"))
+    try:
+        r = requests.get("https://www.okx.com/api/v5/market/ticker", params={"instId": inst}, timeout=10)
+        r.raise_for_status()
+        t = r.json().get("data", [{}])[0]
+        return {"symbol": symbol, "last": float(t.get("last", 0)),
+                "bid": float(t.get("bidPx", 0)), "ask": float(t.get("askPx", 0)),
+                "high_24h": float(t.get("high24h", 0)), "low_24h": float(t.get("low24h", 0)),
+                "volume_24h": float(t.get("vol24h", 0)),
+                "change_pct_24h": float(t.get("sodUtc0", 0) or t.get("open24h", 0)),
+                "timestamp": int(t.get("ts", 0))}
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+# ---------------------------------------------------------------------------
 # WebSocket 实时行情推送
 # ---------------------------------------------------------------------------
 
 import asyncio
-import aiohttp
 
 
-async def fetch_okx_ticker(session: aiohttp.ClientSession, pair: str) -> dict:
-    """从 OKX REST API 拉取最新 ticker + K 线。"""
+def _fetch_okx_ws_data(pair: str) -> dict:
+    """Fetch OKX ticker + candles synchronously (works with proxy)."""
+    import requests
     inst_id = pair.replace("/", "-").replace(":USDT", "-SWAP")
-    ticker_url = f"https://www.okx.com/api/v5/market/ticker?instId={inst_id}"
-    candles_url = f"https://www.okx.com/api/v5/market/candles?instId={inst_id}&bar=1H&limit=5"
-
-    ticker_data = None
-    candles_data = []
-
+    ticker_data, candles_data = None, []
     try:
-        async with session.get(ticker_url, timeout=aiohttp.ClientTimeout(total=3)) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data.get("data"):
-                    ticker_data = data["data"][0]
+        r = requests.get("https://www.okx.com/api/v5/market/ticker",
+                         params={"instId": inst_id}, timeout=5)
+        if r.ok and r.json().get("data"):
+            ticker_data = r.json()["data"][0]
     except Exception as e:
-        logger.warning(f"OKX ticker fetch failed: {e}")
-
+        logger.warning(f"WS ticker: {e}")
     try:
-        async with session.get(candles_url, timeout=aiohttp.ClientTimeout(total=3)) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                if data.get("data"):
-                    candles_data = data["data"][:5]
+        r = requests.get("https://www.okx.com/api/v5/market/candles",
+                         params={"instId": inst_id, "bar": "1H", "limit": 5}, timeout=5)
+        if r.ok and r.json().get("data"):
+            candles_data = r.json()["data"][:5]
     except Exception as e:
-        logger.warning(f"OKX candles fetch failed: {e}")
-
-    return {
-        "pair": pair,
-        "timestamp": datetime.utcnow().isoformat(),
-        "status": "ok" if (ticker_data or candles_data) else "degraded",
-        "source": "okx" if (ticker_data or candles_data) else None,
-        "ticker": ticker_data,
-        "candles": candles_data,
-    }
+        logger.warning(f"WS candles: {e}")
+    return {"pair": pair, "timestamp": datetime.utcnow().isoformat(),
+            "status": "ok" if (ticker_data or candles_data) else "degraded",
+            "source": "okx" if (ticker_data or candles_data) else None,
+            "ticker": ticker_data, "candles": candles_data}
 
 
 @app.websocket("/ws/klines")
 async def ws_klines(websocket: WebSocket, pair: str = "BTC/USDT:USDT"):
-    """WebSocket 端点：每 5s 推送实时 ticker + K 线。"""
     await websocket.accept()
-    logger.info(f"WebSocket connected: {pair}")
-
-    async with aiohttp.ClientSession() as session:
+    logger.info(f"WebSocket: {pair}")
+    loop = asyncio.get_event_loop()
+    try:
+        while True:
+            data = await loop.run_in_executor(None, _fetch_okx_ws_data, pair)
+            await websocket.send_json(data)
+            await asyncio.sleep(5)
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket closed: {pair}")
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
         try:
-            while True:
-                data = await fetch_okx_ticker(session, pair)
-                await websocket.send_json(data)
-                await asyncio.sleep(5)
-        except WebSocketDisconnect:
-            logger.info(f"WebSocket disconnected: {pair}")
-        except Exception as e:
-            logger.error(f"WebSocket error: {e}")
-        finally:
-            try:
-                await websocket.close()
-            except:
-                pass
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # POST /trade/manual and DELETE /trade/positions/{id} — manual trading endpoints
