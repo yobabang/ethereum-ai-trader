@@ -60,6 +60,8 @@ class SimConfig:
     max_position_pct: float = 0.20   # default conservative cap
     min_confidence: float = 0.55
     aggressive: bool = False
+    # Circuit breaker for aggressive mode: auto-downgrade after N consecutive liquidations
+    circuit_breaker_liquidations: int = 3  # None or 0 = disabled
 
 
 @dataclass
@@ -105,6 +107,9 @@ class SimBroker:
         self._last_ticker: dict[str, float] = {}   # fallback for disconnects
         self._ticker_fail_count: dict[str, int] = {}
         self._running = False
+        # Circuit breaker state (aggressive mode auto-downgrade)
+        self._consecutive_liq_count: int = 0
+        self._circuit_broken: bool = False
         self._recover_positions()
 
     # ------------------------------------------------------------------
@@ -447,6 +452,11 @@ class SimBroker:
         logger.info(f"CLOSE {pos.pair} {pos.side} reason={reason} exit=${exit_price:.2f} "
                     f"pnl=${net_pnl:+.2f} id={pos.id}")
 
+        # Reset consecutive liquidation counter on any non-liquidation close
+        # (winning trade or normal SL = strategy still functioning)
+        if reason != "liquidated":
+            self._consecutive_liq_count = 0
+
     def _liquidate(self, pos: OpenPosition, price: float):
         """Force-close at liquidation price."""
         liq_price = self._liquidation_price(pos)
@@ -460,6 +470,35 @@ class SimBroker:
         del self.open_positions[pos.id]
         logger.warning(f"LIQUIDATED {pos.pair} {pos.side} @${liq_price:.2f} "
                        f"margin=${pos.margin:.2f} lost id={pos.id}")
+
+        # Circuit breaker: count consecutive liquidations, auto-downgrade if threshold hit
+        self._consecutive_liq_count += 1
+        self._maybe_apply_circuit_breaker()
+
+    def _maybe_apply_circuit_breaker(self):
+        """Auto-downgrade aggressive mode after N consecutive liquidations.
+
+        Prevents the account from being wiped out by a clearly failing
+        aggressive strategy. Once tripped, caps revert to conservative
+        defaults and stay there until process restart.
+        """
+        threshold = self.config.circuit_breaker_liquidations
+        if (self._circuit_broken or not threshold
+                or self._consecutive_liq_count < threshold):
+            return
+        self._circuit_broken = True
+        old_lev = self.config.max_leverage
+        old_pos = self.config.max_position_pct
+        old_conf = self.config.min_confidence
+        # Downgrade to conservative defaults
+        self.config.max_leverage = 5
+        self.config.max_position_pct = 0.20
+        self.config.min_confidence = 0.55
+        logger.critical(
+            f"🚨 CIRCUIT BREAKER TRIPPED: {self._consecutive_liq_count} consecutive liquidations. "
+            f"Auto-downgrading aggressive mode: lev {old_lev}→5, pos {old_pos*100:.0f}%→20%, "
+            f"conf {old_conf}→0.55. Will stay conservative until restart."
+        )
 
     # ------------------------------------------------------------------
     # Funding rate settlement (SPEC_SUPPLEMENT.md §4.4)

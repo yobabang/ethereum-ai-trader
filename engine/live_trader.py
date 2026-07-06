@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 PAIRS = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
 TIMEFRAME = "1h"
-CHECK_INTERVAL_SECONDS = 900  # 15 minutes
+CHECK_INTERVAL_SECONDS = 300  # 5 minutes
 
 # OKX public market data (NO API KEY needed)
 OKX_CANDLES_URL = "https://www.okx.com/api/v5/market/candles"
@@ -144,7 +144,20 @@ def fetch_ohlcv(pair: str, timeframe: str = "1h", limit: int = 300) -> Optional[
             logger.info(f"OHLCV {pair}: {len(df)} rows from Binance (fallback)")
             return df
     except Exception as e:
-        logger.error(f"Binance OHLCV also failed for {pair}: {e}")
+        logger.warning(f"Binance OHLCV also failed for {pair}: {e}, trying local feather...")
+
+    # --- Fallback 2: Local feather (offline mode) ---
+    try:
+        from engine.trainer import load_historical_data
+        df = load_historical_data("user_data/data", pair, timeframe=timeframe)
+        if df is not None and len(df) > 0:
+            df["date"] = pd.to_datetime(df["date"])
+            # Return last `limit` rows
+            df = df.tail(limit).reset_index(drop=True)
+            logger.info(f"OHLCV {pair}: {len(df)} rows from local feather (offline mode)")
+            return df
+    except Exception as e:
+        logger.error(f"Local feather also failed for {pair}: {e}")
     return None
 
 
@@ -349,6 +362,71 @@ class LiveTrader:
         }
 
     # ------------------------------------------------------------------
+    # Breakout pipeline (mode='breakout') — Donchian channel breakout
+    # ------------------------------------------------------------------
+
+    def _init_breakout(self):
+        if self._trend_strat is None:
+            from engine.breakout_strategy import BreakoutStrategy, BreakoutParams
+            params = BreakoutParams(donchian_period=20, atr_period=14,
+                                    sl_atr_mult=2.0, tp_atr_mult=4.0,
+                                    regime_filter=True, trend_filter=True)
+            self._trend_strat = BreakoutStrategy(params)
+            logger.info("Breakout strategy initialized (Donchian20)")
+
+    def _run_breakout_pipeline(self, df: pd.DataFrame) -> Optional[dict]:
+        self._init_breakout()
+        try:
+            features = self._fe.compute_price_features(df)
+            sig = self._trend_strat.compute_signals(features)[-1]
+        except Exception as e:
+            logger.error(f"Breakout pipeline failed: {e}")
+            return None
+        if sig.action == "hold":
+            return {"action": "HOLD", "reason": sig.reason,
+                    "confidence": 0.5, "expected_return": 0.0, "regime": sig.regime}
+        return {"action": sig.action.upper(), "reason": sig.reason,
+                "expected_return": 0.015 if sig.action == "long" else -0.015,
+                "confidence": 0.60, "position_size_pct": self.params["position_pct"],
+                "stop_loss_pct": self.params["stop_loss_pct"],
+                "take_profit_pct": self.params["take_profit_pct"],
+                "leverage": 3, "regime": sig.regime}
+
+    # ------------------------------------------------------------------
+    # RL pipeline (mode='rl') — pure PPO reinforcement learning
+    # ------------------------------------------------------------------
+
+    def _run_rl_pipeline(self, df: pd.DataFrame) -> Optional[dict]:
+        if self._rl is None:
+            self._init_ai_pipeline()
+        if self._rl is None or not self._rl.is_loaded:
+            return {"action": "HOLD", "reason": "RL model not trained",
+                    "confidence": 0.0, "expected_return": 0.0}
+        try:
+            features = self._fe.compute_price_features(df)
+            preds = self._rl.predict(features)
+        except Exception as e:
+            logger.error(f"RL pipeline failed: {e}")
+            return None
+        if not preds:
+            return {"action": "HOLD", "reason": "RL insufficient data",
+                    "confidence": 0.0, "expected_return": 0.0}
+        p = preds[-1]
+        er, conf = p.get("expected_return", 0), p.get("confidence", 0.5)
+        if conf < self.params["min_confidence"]:
+            return {"action": "HOLD", "reason": f"RL conf {conf:.2f}",
+                    "confidence": conf, "expected_return": er}
+        if abs(er) < self.params["min_signal"]:
+            return {"action": "HOLD", "reason": "RL signal below noise",
+                    "confidence": conf, "expected_return": er}
+        return {"action": "LONG" if er > 0 else "SHORT",
+                "reason": f"RL PPO | er={er:.4f}", "expected_return": er,
+                "confidence": conf, "position_size_pct": self.params["position_pct"],
+                "stop_loss_pct": self.params["stop_loss_pct"],
+                "take_profit_pct": self.params["take_profit_pct"],
+                "leverage": self.params["leverage"], "regime": "UNKNOWN"}
+
+    # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
@@ -362,8 +440,14 @@ class LiveTrader:
 
             if self.mode == "ai":
                 decision = self._run_ai_pipeline(df)
-            else:
+            elif self.mode == "trend":
                 decision = self._run_trend_pipeline(df)
+            elif self.mode == "breakout":
+                decision = self._run_breakout_pipeline(df)
+            elif self.mode == "rl":
+                decision = self._run_rl_pipeline(df)
+            else:
+                decision = self._run_ai_pipeline(df)
 
             if decision is None:
                 logger.warning(f"{pair}: pipeline returned None")
@@ -447,7 +531,7 @@ class LiveTrader:
 
 def main():
     parser = argparse.ArgumentParser(description="Live Trader v2.0 — SimBroker mode")
-    parser.add_argument("--mode", choices=["ai", "trend"], default="ai",
+    parser.add_argument("--mode", choices=["ai", "trend", "breakout", "rl"], default="ai",
                         help="ai=1h AI pipeline, trend=4h trend strategy (default: ai)")
     parser.add_argument("--aggressive", action="store_true",
                         help="Aggressive risk params (lower thresholds, higher leverage)")
