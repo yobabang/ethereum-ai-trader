@@ -480,6 +480,13 @@ class LiveTrader:
                 price = float(df["close"].iloc[-1])
                 logger.info(f"[SIGNAL] {pair} {action} @ ${price:,.2f} | {decision.get('reason', '')[:60]}")
 
+                # Auto-close opposite position (flip)
+                opposite = "short" if side == "long" else "long"
+                for pid, pos in list(self.broker.open_positions.items()):
+                    if pos.pair == pair and pos.side == opposite:
+                        logger.info(f"[FLIP] {pair}: closing {opposite} #{pid} before opening {side}")
+                        self.broker._close(pos, price, "signal_flip")
+
                 order_decision = {
                     "pair": pair,
                     "side": side,
