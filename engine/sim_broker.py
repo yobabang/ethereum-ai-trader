@@ -136,8 +136,14 @@ class SimBroker:
             self.open_positions[pos.id] = pos
             # Recompute balance: subtract margin used
             self.balance -= pos.margin
+        # Also recover closed PnL (accumulated from previous sessions)
+        with self.db._conn() as c:
+            closed_pnl = c.execute(
+                "SELECT COALESCE(SUM(realized_pnl),0) FROM positions WHERE status!='open'"
+            ).fetchone()[0]
+        self.balance += closed_pnl
         if rows:
-            logger.info(f"Recovered {len(rows)} open positions from DB")
+            logger.info(f"Recovered {len(rows)} open positions, closed_pnl={closed_pnl:+.2f}")
 
     # ------------------------------------------------------------------
     # Market data (OKX primary, Binance fallback) — READ ONLY

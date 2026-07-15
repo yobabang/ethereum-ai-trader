@@ -334,13 +334,23 @@ async def trade_account():
     equity = balance + unrealized
     total_closed = conn.execute("SELECT COUNT(*) FROM positions WHERE status!='open'").fetchone()[0]
     wins = conn.execute("SELECT COUNT(*) FROM positions WHERE status!='open' AND realized_pnl>0").fetchone()[0]
+
+    # Today's PnL: first snapshot of today vs now
+    today_start = conn.execute(
+        "SELECT equity FROM equity_snapshots WHERE timestamp LIKE ? || '%' ORDER BY id LIMIT 1",
+        (datetime.utcnow().strftime('%Y-%m-%d'),)
+    ).fetchone()
+    today_equity = today_start[0] if today_start else initial
+    today_pnl = equity - today_equity
+    today_pnl_pct = (today_pnl / today_equity * 100) if today_equity > 0 else 0
+
     conn.close()
 
     return {
         "initial_equity": initial, "equity": round(equity, 2), "balance": round(balance, 2),
         "unrealized_pnl": round(unrealized, 2),
-        "today_pnl": round(equity - initial, 2),
-        "today_pnl_pct": round((equity - initial) / initial * 100, 2),
+        "today_pnl": round(today_pnl, 2),
+        "today_pnl_pct": round(today_pnl_pct, 2),
         "open_positions": len(open_rows), "total_trades": total_closed,
         "win_rate": round(wins / total_closed, 4) if total_closed else 0,
         "max_drawdown": 0.0,
