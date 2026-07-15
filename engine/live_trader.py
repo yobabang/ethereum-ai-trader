@@ -55,6 +55,12 @@ PAIRS = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
 TIMEFRAME = "1h"
 CHECK_INTERVAL_SECONDS = 300  # 5 minutes
 
+# Scalping preset: 1m candles, tight SL/TP, high frequency
+SCALP_PRESET = {
+    "timeframe": "1m", "interval": 60, "sl_atr_mult": 1.0,
+    "tp_atr_mult": 1.5, "max_hold_bars": 4, "sl_tp_check_interval": 1.0,
+}
+
 # OKX public market data (NO API KEY needed)
 OKX_CANDLES_URL = "https://www.okx.com/api/v5/market/candles"
 OKX_TICKER_URL = "https://www.okx.com/api/v5/market/ticker"
@@ -549,21 +555,38 @@ def main():
                         help="Aggressive risk params (lower thresholds, higher leverage)")
     parser.add_argument("--db", default="sim_trader.db", help="SQLite database path")
     parser.add_argument("--equity", type=float, default=1000.0, help="Initial equity (USDT)")
+    parser.add_argument("--leverage", type=int, default=None,
+                        help="Fixed leverage override (max 100)")
+    parser.add_argument("--scalp", action="store_true",
+                        help="Scalping: 1m candles, 60s interval, tight SL/TP")
     args = parser.parse_args()
+
+    # Scalp mode overrides
+    aggressive = args.aggressive
+    if args.scalp:
+        aggressive = True
 
     print("=" * 60)
     print("  SIMULATION TRADER — Virtual money, real market data")
-    print(f"  Mode: {args.mode} | Aggressive: {args.aggressive}")
+    print(f"  Mode: {args.mode} | Aggressive: {aggressive}"
+          f"{' | SCALP' if args.scalp else ''}"
+          f"{' | Lev=' + str(args.leverage) + 'x' if args.leverage else ''}")
     print(f"  Initial equity: ${args.equity}")
     print("  NEVER connects to live trading. OKX public data only.")
     print("=" * 60)
 
     trader = LiveTrader(
         mode=args.mode,
-        aggressive=args.aggressive,
+        aggressive=aggressive,
         db_path=args.db,
         initial_equity=args.equity,
     )
+    # Leverage override
+    if args.leverage:
+        trader.params["leverage"] = min(args.leverage, 100)
+        trader.broker.config.max_leverage = min(args.leverage, 100)
+        logger.info(f"Leverage override: {args.leverage}x (capped at 100x)")
+
     asyncio.run(trader.run_loop())
 
 
