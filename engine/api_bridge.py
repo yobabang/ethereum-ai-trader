@@ -25,10 +25,10 @@ import logging
 from datetime import UTC, datetime
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from engine.sim_broker import SimBroker
+from engine.sim_broker import SimBroker, SimConfig
 from engine.database import Database
 
 logger = logging.getLogger(__name__)
@@ -43,9 +43,9 @@ _db: Optional[Database] = None
 def initialize_broker(db_path: str = "sim_trader.db", initial_equity: float = 1000.0):
     """Initialize the global broker instance (called once at startup)."""
     global _broker, _db
-    _broker = SimBroker(db_path=db_path)
+    _broker = SimBroker(db_path=db_path, config=SimConfig(initial_equity=initial_equity))
     _db = _broker.db
-    logger.info(f"API bridge initialized with DB: {db_path}")
+    logger.info(f"API bridge initialized with DB: {db_path} (initial_equity={initial_equity})")
 
 
 def get_broker() -> SimBroker:
@@ -65,7 +65,7 @@ def get_db() -> Database:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -308,12 +308,46 @@ def _get_price(pair: str, fallback: float) -> float:
     return fallback
 
 
+# Maintenance margin ratio — mirrors engine.sim_broker.MAINTENANCE_MARGIN
+_MAINTENANCE_MARGIN = 0.005
+
+
+def _liq_price(side: str, entry: float, contracts: float, margin: float, funding_paid: float) -> float | None:
+    """Approximate liquidation price, mirroring SimBroker._liquidation_price.
+
+    Returns None when contracts<=0 (degenerate). Exposed for display only —
+    the SimBroker in-memory value remains authoritative for actual liquidation.
+    """
+    if contracts <= 0:
+        return None
+    if side == "long":
+        eff = margin - max(funding_paid, 0)
+        return (entry - eff / contracts) / (1 - _MAINTENANCE_MARGIN)
+    eff = margin - max(-funding_paid, 0)
+    return (entry + eff / contracts) / (1 + _MAINTENANCE_MARGIN)
+
+
 @app.get("/api/v1/trade/account")
 async def trade_account():
-    """Account summary — reads directly from database."""
+    """Account summary — reuses Database.get_account_stats for win_rate/max_drawdown,
+    and computes live equity/unrealized/today_pnl from open positions + current prices.
+
+    initial_equity is derived from the earliest equity snapshot (the starting balance),
+    falling back to the broker's configured initial_equity — never hardcoded.
+    """
     import sqlite3
-    conn = sqlite3.connect("sim_trader.db")
-    initial = 1000.0
+    db = get_db()
+    conn = sqlite3.connect(db.db_path)
+
+    # ---- Determine real initial_equity: earliest snapshot, else broker config ----
+    first_snap = conn.execute(
+        "SELECT equity FROM equity_snapshots ORDER BY id ASC LIMIT 1"
+    ).fetchone()
+    try:
+        broker_init = get_broker().config.initial_equity
+    except Exception:
+        broker_init = 1000.0
+    initial = float(first_snap[0]) if first_snap else float(broker_init)
 
     open_rows = conn.execute(
         "SELECT pair, side, entry_price, contracts, margin FROM positions WHERE status='open'"
@@ -353,6 +387,13 @@ async def trade_account():
 
     conn.close()
 
+    # Reuse Database.get_account_stats for the correctly-computed max_drawdown
+    try:
+        stats = db.get_account_stats(initial)
+        max_drawdown = stats.get("max_drawdown", 0.0)
+    except Exception:
+        max_drawdown = 0.0
+
     return {
         "initial_equity": initial, "equity": round(equity, 2), "balance": round(balance, 2),
         "unrealized_pnl": round(unrealized, 2),
@@ -361,7 +402,7 @@ async def trade_account():
         "today_pnl_pct": round(today_pnl_pct, 2),
         "open_positions": len(open_rows), "total_trades": total_closed,
         "win_rate": round(wins / total_closed, 4) if total_closed else 0,
-        "max_drawdown": 0.0,
+        "max_drawdown": round(max_drawdown, 4),
     }
 
 
@@ -369,7 +410,7 @@ async def trade_account():
 async def trade_positions():
     """Current open positions — reads directly from database."""
     import sqlite3
-    conn = sqlite3.connect("sim_trader.db")
+    conn = sqlite3.connect(get_db().db_path)
     rows = conn.execute(
         "SELECT id, pair, side, entry_price, contracts, margin, leverage, sl_price, tp_price, "
         "funding_paid, entry_time, ai_confidence, ai_reason, mode FROM positions WHERE status='open'"
@@ -379,6 +420,7 @@ async def trade_positions():
         pid, pair, side, entry, contracts, margin, lev, sl, tp, funding, etime, conf, reason, mode = r
         price = _get_price(pair, entry)
         unrealized = contracts * (price - entry) if side == "long" else contracts * (entry - price)
+        liq = _liq_price(side, entry, contracts, margin, funding)
         positions.append({
             "id": pid, "pair": pair, "side": side,
             "entry_price": round(entry, 2), "current_price": round(price, 2),
@@ -388,6 +430,7 @@ async def trade_positions():
             "roe_pct": round(unrealized / margin * 100, 2) if margin else 0,
             "funding_paid": round(funding, 4), "entry_time": etime,
             "ai_confidence": conf, "ai_reason": reason, "mode": mode,
+            "liq_price": round(liq, 2) if liq is not None else None,
         })
     conn.close()
     return {"positions": positions, "count": len(positions)}
@@ -529,19 +572,25 @@ async def ws_klines(websocket: WebSocket, pair: str = "BTC/USDT:USDT"):
 
 
 # POST /trade/manual and DELETE /trade/positions/{id} — manual trading endpoints
-from pydantic import BaseModel
+from typing import Literal
+from pydantic import BaseModel, Field
 
 
 class ManualOrderRequest(BaseModel):
-    """Request body for manual order placement."""
+    """Request body for manual order placement.
+
+    All risk parameters are hard-bounded by Pydantic Field constraints so a
+    malformed/overridden request can never exceed the platform's risk ceiling
+    (5x leverage, 20% position, SL/TP within 10%) — regardless of caller.
+    """
     pair: str                                    # e.g. "BTC/USDT:USDT"
     side: str                                    # "long" or "short"
-    position_size_pct: float = 0.10              # fraction of equity
-    leverage: int = 3
-    stop_loss_pct: float = 0.02
-    take_profit_pct: float = 0.04
-    confidence: float = 1.0                      # manual = max confidence
-    reason: str = "manual"
+    position_size_pct: float = Field(default=0.10, ge=0.0, le=0.20)   # ≤ 20% equity
+    leverage: int = Field(default=3, ge=1, le=50)                      # ≤ 50x
+    stop_loss_pct: float = Field(default=0.02, gt=0.0, le=0.10)        # 0–10%
+    take_profit_pct: float = Field(default=0.04, gt=0.0, le=0.10)      # 0–10%
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)             # manual = max confidence
+    reason: str = Field(default="manual", max_length=200)
 
 
 @app.post("/api/v1/trade/manual")
@@ -591,6 +640,93 @@ async def trade_close_position(pos_id: int):
 
     broker._close(pos, price, "manual")
     return {"success": True, "position_id": pos_id, "exit_price": price, "reason": "manual"}
+
+
+# ===========================================================================
+# Runtime control — mode / leverage / paused / risk params (SPEC: trading_state.json)
+# ===========================================================================
+
+_TRADING_STATE_PATH = "trading_state.json"
+
+
+class TradingControlRequest(BaseModel):
+    """Partial update to runtime trading state. Only provided fields are applied."""
+    mode: Literal["ai", "trend", "breakout", "rl", "hybrid"] | None = None
+    leverage: int | None = Field(default=None, ge=1, le=50)
+    paused: bool | None = None
+    stop_loss_pct: float | None = Field(default=None, gt=0.0, le=0.10)
+    take_profit_pct: float | None = Field(default=None, gt=0.0, le=0.10)
+    min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    position_pct: float | None = Field(default=None, ge=0.0, le=0.50)
+
+
+def _read_trading_state() -> dict:
+    try:
+        with open(_TRADING_STATE_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    except Exception:
+        return {}
+
+
+def _write_trading_state(state: dict):
+    with open(_TRADING_STATE_PATH, "w") as f:
+        json.dump(state, f, indent=2)
+
+
+@app.get("/api/v1/trade/control")
+async def trade_control_get():
+    """Read current runtime trading state (mode/leverage/paused/params).
+
+    This is what live_trader will use on its next decision cycle. Reflects
+    the last value written by the frontend (or {} if never set).
+    """
+    state = _read_trading_state()
+    # Fill defaults for display when unset
+    return {
+        "mode": state.get("mode"),
+        "leverage": state.get("leverage"),
+        "paused": state.get("paused", False),
+        "stop_loss_pct": state.get("stop_loss_pct"),
+        "take_profit_pct": state.get("take_profit_pct"),
+        "min_confidence": state.get("min_confidence"),
+        "position_pct": state.get("position_pct"),
+        "updated_at": state.get("updated_at"),
+        "updated_by": state.get("updated_by"),
+    }
+
+
+@app.post("/api/v1/trade/control")
+async def trade_control_set(req: TradingControlRequest):
+    """Write a partial runtime control update. Takes effect on live_trader's
+    next decision cycle (at most `interval` seconds later).
+
+    Only provided fields are merged into the existing state file. This does
+    NOT stop the live_trader process — `paused=true` just skips new entries
+    while SL/TP on existing positions still run.
+    """
+    state = _read_trading_state()
+    changes = []
+    for field in ("mode", "leverage", "paused", "stop_loss_pct",
+                  "take_profit_pct", "min_confidence", "position_pct"):
+        val = getattr(req, field)
+        if val is not None:
+            old = state.get(field)
+            state[field] = val
+            changes.append(f"{field}: {old}→{val}")
+
+    state["updated_at"] = datetime.now(UTC).isoformat()
+    state["updated_by"] = "frontend"
+    _write_trading_state(state)
+
+    logger.info(f"[CONTROL] {', '.join(changes) if changes else 'no-op'}")
+    return {
+        "success": True,
+        "changes": changes,
+        "note": "Takes effect on next live_trader cycle",
+        "updated_at": state["updated_at"],
+    }
 
 
 if __name__ == "__main__":

@@ -76,19 +76,19 @@ class RiskCalculator:
     """
 
     # Base risk parameters
-    MAX_LEVERAGE = 5
+    MAX_LEVERAGE = 50
     MAX_POSITION_PCT = 0.20
     MAX_DRAWDOWN_PCT = 0.15
     DAILY_LOSS_LIMIT_PCT = 0.05
-    PER_TRADE_MAX_LOSS_PCT = 0.08  # Cap single-trade loss at 8% of position
+    PER_TRADE_MAX_LOSS_PCT = 0.03  # Cap single-trade loss at 3% (tightened for high-lev)
     MIN_CONFIDENCE = 0.55
 
     def __init__(
         self,
-        max_leverage: int = 5,
+        max_leverage: int = 50,
         max_position_pct: float = 0.20,
         max_drawdown_pct: float = 0.15,
-        per_trade_max_loss_pct: float = 0.08,
+        per_trade_max_loss_pct: float = 0.03,
         daily_loss_limit_pct: float = 0.05,
     ):
         self.MAX_LEVERAGE = max_leverage
@@ -184,8 +184,12 @@ class RiskCalculator:
         else:
             atr_sl = atr_pct * 1.5  # HIGH_VOLATILITY (shouldn't reach here)
         stop_loss_pct = round(max(atr_sl, 0.005), 4)
-        # Cap: per-trade max loss / max leverage = max safe stop-loss
-        max_sl_by_loss = self.PER_TRADE_MAX_LOSS_PCT / max(self.MAX_LEVERAGE, 1)
+        # Cap: per-trade max loss / ACTUAL leverage = max safe stop-loss.
+        # Uses the actual selected leverage (not the MAX_LEVERAGE cap) so that
+        # low-leverage trades keep a sane SL floor while high-leverage trades
+        # get the tight SL their risk budget allows.
+        leverage = self._select_leverage(regime, confidence, atr_pct)
+        max_sl_by_loss = self.PER_TRADE_MAX_LOSS_PCT / max(leverage, 1)
         stop_loss_pct = min(stop_loss_pct, max_sl_by_loss)
         stop_loss_pct = round(stop_loss_pct, 4)
 
@@ -199,9 +203,6 @@ class RiskCalculator:
         else:
             tp_ratio = 2.0
         take_profit_pct = round(stop_loss_pct * tp_ratio, 4)
-
-        # ---- 9. Leverage selection ----
-        leverage = self._select_leverage(regime, confidence, atr_pct)
 
         return RiskParams(
             max_position_pct=max_position_pct,
@@ -262,7 +263,7 @@ class DecisionArbitrator:
         "extreme negative funding → long only",
         "3 consecutive daily losses → stop 12 hours",
         "max position 20% equity (never all-in)",
-        "max leverage 5x",
+        "max leverage 50x",
     ]
 
     def __init__(self, risk_calculator: RiskCalculator):

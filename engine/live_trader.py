@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -55,10 +56,31 @@ PAIRS = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
 TIMEFRAME = "1h"
 CHECK_INTERVAL_SECONDS = 300  # 5 minutes
 
+# Cross-process control channel: api_bridge writes trading_state.json,
+# live_trader reads it at the top of each run_once() cycle. Lets the frontend
+# switch mode / leverage / paused / risk params at runtime (takes effect next
+# cycle). Missing or corrupt file = use current in-memory state (no-op).
+TRADING_STATE_PATH = "trading_state.json"
+
 # Scalping preset: 1m candles, tight SL/TP, high frequency
 SCALP_PRESET = {
     "timeframe": "1m", "interval": 60, "sl_atr_mult": 1.0,
     "tp_atr_mult": 1.5, "max_hold_bars": 4, "sl_tp_check_interval": 1.0,
+}
+
+# High-frequency hybrid preset: 5m candles, AI direction + trend timing.
+# AI (4h-trained L2) gives DIRECTION only (sign of expected_return);
+# trend strategy gives TIMING. Both must agree before opening.
+# High leverage + tight SL/TP = fast in/out scalping style.
+HYBRID_PRESET = {
+    "timeframe": "5m",
+    "interval": 300,            # 5-min decision cycle
+    "leverage": 20,             # default 20x, --leverage can raise to 50
+    "position_pct": 0.30,       # 30% equity per trade (margin is small at high lev)
+    "min_confidence": 0.50,
+    "stop_loss_pct": 0.008,     # 0.8% tight stop (50x liq distance ~2%)
+    "take_profit_pct": 0.015,   # 1.5% quick target
+    "min_signal": 0.0002,
 }
 
 # OKX public market data (NO API KEY needed)
@@ -86,7 +108,7 @@ DEFAULTS = {
     "min_signal": 0.0003,
 }
 AGGRESSIVE = {
-    "leverage": 10,   # 10x gives breathing room
+    "leverage": 50,   # high-leverage cap (was 10)
     "position_pct": 1.0,
     "min_confidence": 0.45,
     "stop_loss_pct": 0.03,   # wider SL, fewer false stops
@@ -441,11 +463,150 @@ class LiveTrader:
                 "leverage": self.params["leverage"], "regime": "UNKNOWN"}
 
     # ------------------------------------------------------------------
+    # Hybrid pipeline (mode='hybrid') — AI direction + trend timing
+    # ------------------------------------------------------------------
+
+    def _run_hybrid_pipeline(self, df: pd.DataFrame) -> Optional[dict]:
+        """High-frequency hybrid: AI gives direction, trend strategy gives timing.
+
+        The 4h-trained L2 model is fed 5m features — we only trust its DIRECTION
+        (sign of expected_return), not magnitude. The trend strategy provides the
+        timing signal on the same 5m data. Both must agree on direction before
+        opening; disagreement → HOLD.
+        """
+        self._init_ai_pipeline()
+        if self._trend_strat is None:
+            from engine.trend_strategy import TrendStrategy, TrendParams
+            # Shorter EMAs for 5m: ema9 ~45min, ema50 ~4h
+            self._trend_strat = TrendStrategy(TrendParams(
+                ema_fast=9, ema_slow=50, sl_atr_mult=1.0, tp_atr_mult=1.5,
+                regime_filter=True, slope_confirm=True, trend_filter=True,
+            ))
+            logger.info("Hybrid: trend strategy initialized (5m, ema9/50)")
+
+        try:
+            features = self._fe.compute_price_features(df)
+            preds = self._dp.predict(features.iloc[-1:])
+            signals = self._trend_strat.compute_signals(features)
+        except Exception as e:
+            logger.error(f"Hybrid pipeline failed: {e}")
+            return None
+
+        if not preds or not preds[-1] or not signals:
+            return None
+
+        # --- AI direction (sign only) ---
+        p = preds[-1]
+        er = p["expected_return"]
+        conf = p["confidence"]
+        ai_dir = "long" if er > self.params["min_signal"] else \
+                 "short" if er < -self.params["min_signal"] else None
+
+        # --- Trend timing ---
+        sig = signals[-1]
+        trend_dir = sig.action if sig.action in ("long", "short") else None
+
+        # --- Fuse: both must agree ---
+        if ai_dir is None:
+            return {"action": "HOLD", "reason": f"AI no clear direction (er={er:.5f})",
+                    "confidence": conf, "expected_return": er, "regime": sig.regime}
+        if trend_dir is None:
+            return {"action": "HOLD", "reason": f"trend no signal ({sig.reason})",
+                    "confidence": conf, "expected_return": er, "regime": sig.regime}
+        if ai_dir != trend_dir:
+            return {"action": "HOLD",
+                    "reason": f"AI/策略分歧: AI={ai_dir} trend={trend_dir}",
+                    "confidence": conf, "expected_return": er, "regime": sig.regime}
+
+        # Agreed — open. SL/TP from hybrid preset (ATR-aware fallback).
+        atr_pct = float(features["atr_ratio"].iloc[-1]) if "atr_ratio" in features.columns else 0.005
+        sl = max(self.params["stop_loss_pct"], atr_pct * 0.8)
+        tp = max(self.params["take_profit_pct"], atr_pct * 1.5)
+        return {
+            "action": ai_dir.upper(),
+            "reason": f"hybrid {ai_dir} | AI er={er:.4f} conf={conf:.2f} | trend: {sig.reason}",
+            "expected_return": er,
+            "confidence": conf,
+            "position_size_pct": self.params["position_pct"],
+            "stop_loss_pct": sl,
+            "take_profit_pct": tp,
+            "leverage": self.params["leverage"],
+            "regime": sig.regime,
+        }
+
+    # ------------------------------------------------------------------
+    # Runtime control — read trading_state.json written by api_bridge
+    # ------------------------------------------------------------------
+
+    def _read_trading_state(self) -> dict:
+        """Read the cross-process control file. Returns {} on missing/corrupt."""
+        try:
+            with open(TRADING_STATE_PATH) as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+        except Exception as e:
+            logger.debug(f"trading_state read error: {e}")
+            return {}
+
+    def _apply_trading_state(self) -> bool:
+        """Merge trading_state.json into self.mode / self.params / broker.config.
+
+        Returns True if the bot is PAUSED (should skip opening new positions
+        this cycle, but SL/TP checks still run to protect existing positions).
+        """
+        state = self._read_trading_state()
+        if not state:
+            return False
+
+        changes = []
+
+        # Mode switch
+        new_mode = state.get("mode")
+        if new_mode and new_mode != self.mode and new_mode in ("ai", "trend", "breakout", "rl", "hybrid"):
+            changes.append(f"mode {self.mode}→{new_mode}")
+            self.mode = new_mode
+
+        # Leverage
+        new_lev = state.get("leverage")
+        if new_lev is not None and new_lev != self.params.get("leverage"):
+            new_lev = min(int(new_lev), 50)
+            changes.append(f"lev {self.params.get('leverage')}→{new_lev}")
+            self.params["leverage"] = new_lev
+            self.broker.config.max_leverage = max(self.broker.config.max_leverage, new_lev)
+
+        # Paused flag — skip opening, keep SL/TP
+        paused = bool(state.get("paused", False))
+
+        # Risk params
+        for key, state_key in [
+            ("stop_loss_pct", "stop_loss_pct"),
+            ("take_profit_pct", "take_profit_pct"),
+            ("min_confidence", "min_confidence"),
+            ("position_pct", "position_pct"),
+            ("min_signal", "min_signal"),
+        ]:
+            val = state.get(state_key)
+            if val is not None and val != self.params.get(key):
+                changes.append(f"{key} {self.params.get(key)}→{val}")
+                self.params[key] = val
+
+        if changes:
+            logger.info(f"[STATE] applied: {', '.join(changes)}")
+
+        if paused:
+            logger.info("[STATE] PAUSED — skipping new entries this cycle (SL/TP still active)")
+        return paused
+
+    # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
     def run_once(self):
         """One iteration: fetch data → pipeline → sim_broker."""
+        # Apply runtime control from trading_state.json (mode/leverage/paused/params)
+        paused = self._apply_trading_state()
+
         for pair in PAIRS:
             df = fetch_ohlcv(pair, self.timeframe, limit=300)
             if df is None or len(df) < 60:
@@ -460,6 +621,8 @@ class LiveTrader:
                 decision = self._run_breakout_pipeline(df)
             elif self.mode == "rl":
                 decision = self._run_rl_pipeline(df)
+            elif self.mode == "hybrid":
+                decision = self._run_hybrid_pipeline(df)
             else:
                 decision = self._run_ai_pipeline(df)
 
@@ -469,7 +632,8 @@ class LiveTrader:
 
             action = decision["action"]
 
-            # Log decision to DB
+            # Log decision to DB (always — even when paused, so you can see
+            # what the AI would have done)
             self.db.log_decision({
                 "pair": pair, "action": action,
                 "confidence": decision.get("confidence", 0),
@@ -479,10 +643,16 @@ class LiveTrader:
                 "take_profit_pct": decision.get("take_profit_pct", 0),
                 "leverage": decision.get("leverage", self.params["leverage"]),
                 "reason": decision.get("reason", ""),
-                "executed": action.upper() in ("LONG", "SHORT"),
+                "executed": (not paused) and action.upper() in ("LONG", "SHORT"),
                 "mode": self.mode,
                 "aggressive": self.aggressive,
             })
+
+            # When paused: log the would-be action but do NOT open/flip
+            if paused:
+                if action.upper() in ("LONG", "SHORT"):
+                    logger.info(f"[PAUSED] would {action} {pair} @ ${df['close'].iloc[-1]:,.2f} — skipped")
+                continue
 
             if action.upper() in ("LONG", "SHORT"):
                 side = action.lower()
@@ -514,11 +684,13 @@ class LiveTrader:
             else:
                 logger.info(f"[{action}] {pair} @ ${df['close'].iloc[-1]:,.2f} | {decision.get('reason', '')[:50]}")
 
-        # Check SL/TP and snapshot after each cycle
+        # Check SL/TP and snapshot after each cycle — ALWAYS runs, even when
+        # paused, so existing positions are still protected.
         self.broker.check_positions()
         self.broker.snapshot_equity()
         logger.info(f"[HEARTBEAT] equity=${self.broker.total_equity():.2f} "
-                    f"open={len(self.broker.open_positions)} mode={self.mode}")
+                    f"open={len(self.broker.open_positions)} mode={self.mode}"
+                    f"{' PAUSED' if paused else ''}")
 
     async def run_loop(self):
         """Main async loop: AI every 15min + SL/TP every 5s + snapshot every 30s."""
@@ -552,26 +724,37 @@ class LiveTrader:
 
 def main():
     parser = argparse.ArgumentParser(description="Live Trader v2.0 — SimBroker mode")
-    parser.add_argument("--mode", choices=["ai", "trend", "breakout", "rl"], default="ai",
-                        help="ai=1h AI pipeline, trend=4h trend strategy (default: ai)")
+    parser.add_argument("--mode", choices=["ai", "trend", "breakout", "rl", "hybrid"], default="ai",
+                        help="ai=1h AI pipeline, trend=4h trend, hybrid=5m AI+策略高频高倍 (default: ai)")
     parser.add_argument("--aggressive", action="store_true",
                         help="Aggressive risk params (lower thresholds, higher leverage)")
     parser.add_argument("--db", default="sim_trader.db", help="SQLite database path")
     parser.add_argument("--equity", type=float, default=1000.0, help="Initial equity (USDT)")
     parser.add_argument("--leverage", type=int, default=None,
-                        help="Fixed leverage override (max 100)")
+                        help="Fixed leverage override (max 50)")
     parser.add_argument("--scalp", action="store_true",
                         help="Scalping: 1m candles, 60s interval, tight SL/TP")
+    parser.add_argument("--highfreq", action="store_true",
+                        help="High-frequency hybrid: 5m candles, 300s interval, AI+策略 (alias for --mode hybrid)")
     args = parser.parse_args()
 
-    # Scalp mode overrides
+    # Scalp / highfreq mode overrides
     aggressive = args.aggressive
     timeframe = None
     interval = None
-    if args.scalp:
+    mode = args.mode
+    if args.highfreq:
+        mode = "hybrid"
+        timeframe = HYBRID_PRESET["timeframe"]
+        interval = HYBRID_PRESET["interval"]
+    elif args.scalp:
         aggressive = True
         timeframe = SCALP_PRESET["timeframe"]
         interval = SCALP_PRESET["interval"]
+    elif mode == "hybrid":
+        # --mode hybrid without --highfreq: still use 5m/300s defaults
+        timeframe = HYBRID_PRESET["timeframe"]
+        interval = HYBRID_PRESET["interval"]
 
     print("=" * 60)
     print("  SIMULATION TRADER — Virtual money, real market data")
@@ -585,18 +768,27 @@ def main():
     print("=" * 60)
 
     trader = LiveTrader(
-        mode=args.mode,
+        mode=mode,
         aggressive=aggressive,
         db_path=args.db,
         initial_equity=args.equity,
         timeframe=timeframe,
         interval=interval,
     )
-    # Leverage override
+    # For hybrid mode, apply HYBRID preset params
+    if mode == "hybrid":
+        trader.params = {**trader.params, **HYBRID_PRESET}
+        # timeframe/interval already set via constructor; ensure broker caps allow high lev
+        trader.broker.config.max_leverage = max(trader.broker.config.max_leverage, HYBRID_PRESET["leverage"])
+        logger.info(f"Hybrid preset applied: lev={HYBRID_PRESET['leverage']}x "
+                    f"SL={HYBRID_PRESET['stop_loss_pct']} TP={HYBRID_PRESET['take_profit_pct']}")
+
+    # Leverage override (capped at 50)
     if args.leverage:
-        trader.params["leverage"] = min(args.leverage, 100)
-        trader.broker.config.max_leverage = min(args.leverage, 100)
-        logger.info(f"Leverage override: {args.leverage}x (capped at 100x)")
+        cap = 50
+        trader.params["leverage"] = min(args.leverage, cap)
+        trader.broker.config.max_leverage = min(args.leverage, cap)
+        logger.info(f"Leverage override: {args.leverage}x (capped at {cap}x)")
 
     asyncio.run(trader.run_loop())
 

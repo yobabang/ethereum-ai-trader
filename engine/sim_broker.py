@@ -60,8 +60,10 @@ class SimConfig:
     max_position_pct: float = 0.20   # default conservative cap
     min_confidence: float = 0.55
     aggressive: bool = False
-    # Circuit breaker for aggressive mode: auto-downgrade after N consecutive liquidations
-    circuit_breaker_liquidations: int = 3  # None or 0 = disabled
+    # Circuit breaker: auto-downgrade after N consecutive liquidations.
+    # Disabled by default (0) — high-freq/high-leverage mode opts out of the
+    # auto-downgrade so it can run as-configured. Enable explicitly to restore.
+    circuit_breaker_liquidations: int = 0  # 0 = disabled
 
 
 @dataclass
@@ -98,7 +100,7 @@ class SimBroker:
         self.config = config or SimConfig()
         # Apply aggressive caps if requested
         if self.config.aggressive:
-            self.config.max_leverage = 1000   # effectively unlimited
+            self.config.max_leverage = 50     # high-leverage cap (was 1000/unlimited)
             self.config.max_position_pct = 1.0
             self.config.min_confidence = 0.45
         self.equity = self.config.initial_equity
