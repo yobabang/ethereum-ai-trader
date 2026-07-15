@@ -21,6 +21,7 @@ export interface AccountSummary {
   equity: number;
   balance: number;
   unrealized_pnl: number;
+  realized_pnl_today: number;
   today_pnl: number;
   today_pnl_pct: number;
   open_positions: number;

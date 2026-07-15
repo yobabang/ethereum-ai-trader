@@ -176,10 +176,13 @@ class LiveTrader:
     """Main trading loop. AI/trend decisions → SimBroker execution."""
 
     def __init__(self, mode: str = "ai", aggressive: bool = False,
-                 db_path: str = "sim_trader.db", initial_equity: float = 1000.0):
+                 db_path: str = "sim_trader.db", initial_equity: float = 1000.0,
+                 timeframe: str = None, interval: int = None):
         self.mode = mode
         self.aggressive = aggressive
         self.params = AGGRESSIVE if aggressive else DEFAULTS
+        self.timeframe = timeframe or TIMEFRAME
+        self.interval = interval or CHECK_INTERVAL_SECONDS
 
         # Initialize sim broker
         config = SimConfig(
@@ -342,7 +345,7 @@ class LiveTrader:
             logger.info("Trend strategy initialized (4h, ema9/100, trend_filter)")
 
         # Resample to 4h if input is 1h
-        if TIMEFRAME == "1h":
+        if self.timeframe == "1h":
             df_4h = df.set_index("date").resample("4h").agg({
                 "open": "first", "high": "max", "low": "min",
                 "close": "last", "volume": "sum",
@@ -444,7 +447,7 @@ class LiveTrader:
     def run_once(self):
         """One iteration: fetch data → pipeline → sim_broker."""
         for pair in PAIRS:
-            df = fetch_ohlcv(pair, TIMEFRAME, limit=300)
+            df = fetch_ohlcv(pair, self.timeframe, limit=300)
             if df is None or len(df) < 60:
                 logger.warning(f"{pair}: insufficient data ({len(df) if df is not None else 0} rows)")
                 continue
@@ -533,7 +536,7 @@ class LiveTrader:
                     self.run_once()
                 except Exception as e:
                     logger.error(f"Loop error: {e}", exc_info=True)
-                await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+                await asyncio.sleep(self.interval)
         except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("Shutting down...")
         finally:
@@ -563,15 +566,21 @@ def main():
 
     # Scalp mode overrides
     aggressive = args.aggressive
+    timeframe = None
+    interval = None
     if args.scalp:
         aggressive = True
+        timeframe = SCALP_PRESET["timeframe"]
+        interval = SCALP_PRESET["interval"]
 
     print("=" * 60)
     print("  SIMULATION TRADER — Virtual money, real market data")
     print(f"  Mode: {args.mode} | Aggressive: {aggressive}"
           f"{' | SCALP' if args.scalp else ''}"
           f"{' | Lev=' + str(args.leverage) + 'x' if args.leverage else ''}")
-    print(f"  Initial equity: ${args.equity}")
+    print(f"  Initial equity: ${args.equity}"
+          f"{' | TF=' + timeframe if timeframe else ''}"
+          f"{' | T=' + str(interval) + 's' if interval else ''}")
     print("  NEVER connects to live trading. OKX public data only.")
     print("=" * 60)
 
@@ -580,6 +589,8 @@ def main():
         aggressive=aggressive,
         db_path=args.db,
         initial_equity=args.equity,
+        timeframe=timeframe,
+        interval=interval,
     )
     # Leverage override
     if args.leverage:

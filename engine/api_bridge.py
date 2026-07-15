@@ -335,10 +335,17 @@ async def trade_account():
     total_closed = conn.execute("SELECT COUNT(*) FROM positions WHERE status!='open'").fetchone()[0]
     wins = conn.execute("SELECT COUNT(*) FROM positions WHERE status!='open' AND realized_pnl>0").fetchone()[0]
 
-    # Today's PnL: first snapshot of today vs now
+    # Today's realized PnL from closed positions
+    today_cutoff = datetime.utcnow().strftime('%Y-%m-%d') + 'T00:00:00'
+    realized_today = conn.execute(
+        'SELECT COALESCE(SUM(realized_pnl),0) FROM positions WHERE status!="open" AND exit_time >= ?',
+        (today_cutoff,)
+    ).fetchone()[0]
+
+    # Today's overall PnL
     today_start = conn.execute(
-        "SELECT equity FROM equity_snapshots WHERE timestamp LIKE ? || '%' ORDER BY id LIMIT 1",
-        (datetime.utcnow().strftime('%Y-%m-%d'),)
+        'SELECT equity FROM equity_snapshots WHERE timestamp < ? ORDER BY id DESC LIMIT 1',
+        (today_cutoff,)
     ).fetchone()
     today_equity = today_start[0] if today_start else initial
     today_pnl = equity - today_equity
@@ -349,6 +356,7 @@ async def trade_account():
     return {
         "initial_equity": initial, "equity": round(equity, 2), "balance": round(balance, 2),
         "unrealized_pnl": round(unrealized, 2),
+        "realized_pnl_today": round(realized_today, 2),
         "today_pnl": round(today_pnl, 2),
         "today_pnl_pct": round(today_pnl_pct, 2),
         "open_positions": len(open_rows), "total_trades": total_closed,
